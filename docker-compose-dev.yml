@@ -1,10 +1,10 @@
 services:
   imap-rest:
-    image: ghcr.io/daniloreddy/imap-rest:latest
-    container_name: imap-rest
-    restart: unless-stopped
+    build: .
+    container_name: imap-rest-dev
+    restart: "no"
     ports:
-      - "${HOST:-127.0.0.1}:${PORT:-8000}:${PORT:-8000}"  # HOST=0.0.0.0 per LAN / reverse proxy / esposizione diretta
+      - "${PORT:-8000}:${PORT:-8000}"
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=${TZ:-UTC}

@@ -72,9 +72,14 @@ Account name is uppercased automatically (e.g. `"danilo"` → `IMAP_DANILO_HOST`
 
 All IMAP operations use UID mode (`imap.uid(...)`) for stable message addressing across sessions. Blocking IMAP/SMTP calls run via `asyncio.to_thread` inside the async endpoints (`app/main.py`'s `_run_tracked`), which is also where every call gets logged to `MetricsStore`.
 
-## Docker deviation
+## Docker
 
-`docker-compose.yml` here builds the image locally (`build: .`) rather than pulling from GHCR — unlike `@rules/docker.md`'s two-file (`docker-compose.yml` prod / `docker-compose-dev.yml` dev) GHCR pattern, this project has no CI/CD publishing an image. Deploy is `rsync.sh` (pushes the repo to the remote host) + `docker compose up --build` there. If a GHCR pipeline is added later, split into the standard two-compose pattern.
+`.github/workflows/docker-publish.yml` builds and pushes the image to `ghcr.io/daniloreddy/imap-rest` on push to `main` and on `v*.*.*` tags. Standard two-file split per `@rules/docker.md`:
+
+- `docker-compose.yml` — production, pulls `ghcr.io/daniloreddy/imap-rest:latest`.
+- `docker-compose-dev.yml` — local build (`build: .`) for testing before a push, `restart: "no"`.
+
+`rsync.sh` (pushes the repo source to the remote host for a local build) predates the GHCR pipeline and is now redundant for deploys — the remote can instead run `docker compose pull && docker compose up -d` against the published image. Kept for now since it's still a valid way to test an unpushed local change on the remote; reconsider removing it once the GHCR flow is the only deploy path in practice.
 
 ## Deps
 
