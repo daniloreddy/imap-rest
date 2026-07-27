@@ -28,7 +28,7 @@ def _parse_body(raw: bytes) -> Any:
 def call(base_url: str, method: str, path: str, token: str | None, payload: dict[str, Any] | None = None) -> Any:
     url = f"{base_url.rstrip('/')}{path}"
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "User-Agent": "imap-rest-test-api/1.0"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
