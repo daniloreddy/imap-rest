@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IMAP REST API</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --accent: #6c8ef7;
+      --accent-dim: #2a3560;
+      --get: #3ecf8e;
+      --post: #6c8ef7;
+      --get-bg: #0d2e1e;
+      --post-bg: #1a2040;
+      --text: #e2e4ed;
+      --muted: #6b7280;
+      --code-bg: #12151f;
+      --tag-bg: #252836;
+      --radius: 8px;
+      --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.6;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sidebar */
+    nav {
+      width: 240px;
+      min-width: 240px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    nav .logo {
+      padding: 0 20px 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+
+    nav .logo h1 { font-size: 15px; font-weight: 700; color: var(--accent); }
+    nav .logo p { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    nav a {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 20px;
+      text-decoration: none;
+      color: var(--muted);
+      font-size: 13px;
+      transition: color 0.15s, background 0.15s;
+      border-left: 2px solid transparent;
+    }
+
+    nav a:hover { color: var(--text); background: rgba(108,142,247,.07); }
+    nav a.active { color: var(--accent); border-left-color: var(--accent); background: rgba(108,142,247,.07); }
+
+    nav a .badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      letter-spacing: .5px;
+    }
+
+    .badge-get  { background: var(--get-bg);  color: var(--get); }
+    .badge-post { background: var(--post-bg); color: var(--post); }
+
+    nav .section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      padding: 16px 20px 6px;
+      font-weight: 600;
+    }
+
+    /* Main */
+    main {
+      flex: 1;
+      padding: 40px 48px;
+      max-width: 900px;
+    }
+
+    .page-header {
+      margin-bottom: 48px;
+    }
+
+    .page-header h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+    .page-header p { color: var(--muted); font-size: 14px; }
+
+    .base-url {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 16px;
+      margin-top: 16px;
+    }
+
+    .base-url label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+    .base-url code { font-family: var(--font-mono); font-size: 13px; color: var(--accent); }
+
+    .auth-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      margin-top: 20px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .auth-box .icon { font-size: 18px; margin-top: 1px; }
+    .auth-box h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .auth-box p { font-size: 13px; color: var(--muted); }
+    .auth-box code { font-family: var(--font-mono); color: var(--accent); background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+
+    /* Endpoint card */
+    .endpoint {
+      margin-bottom: 48px;
+      scroll-margin-top: 24px;
+    }
+
+    .endpoint-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .method {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 800;
+      padding: 3px 8px;
+      border-radius: 4px;
+      letter-spacing: .5px;
+    }
+
+    .method-get  { background: var(--get-bg);  color: var(--get); }
+    .method-post { background: var(--post-bg); color: var(--post); }
+
+    .endpoint-header h2 {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .endpoint-desc {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+
+    .note {
+      background: #1a2535;
+      border-left: 3px solid #4a90d9;
+      border-radius: 0 var(--radius) var(--radius) 0;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #a0b8d8;
+      margin-bottom: 20px;
+    }
+
+    /* Tabs */
+    .tabs { margin-bottom: 24px; }
+
+    .tab-list {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+
+    .tab-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 8px 14px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color .15s;
+    }
+
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
+
+    td code, th code {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      background: var(--tag-bg);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: #c9a9f5;
+    }
+
+    .req { color: #f87171; font-size: 11px; font-weight: 600; }
+    .opt { color: var(--muted); font-size: 11px; }
+
+    /* Code block */
+    .code-block {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+
+    .code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .code-header span { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
+
+    .copy-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+
+    .copy-btn:hover { color: var(--text); border-color: var(--accent); }
+    .copy-btn.copied { color: var(--get); border-color: var(--get); }
+
+    pre {
+      padding: 16px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: #c9d1d9;
+    }
+
+    /* Syntax highlight */
+    .k { color: #6c8ef7; }   /* key */
+    .s { color: #a3d977; }   /* string */
+    .n { color: #f0a05a; }   /* number */
+    .b { color: #e8a97e; }   /* bool/null */
+
+    /* Section divider */
+    .section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      font-weight: 600;
+      margin: 48px 0 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .section-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* Common fields box */
+    .common-fields {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 40px;
+    }
+
+    .common-fields h3 { font-size: 13px; font-weight: 600; margin-bottom: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+
+    /* Error codes */
+    .error-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 12px 24px;
+      align-items: start;
+    }
+
+    .error-code {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      color: #f87171;
+    }
+
+    .error-info h4 { font-size: 13px; margin-bottom: 4px; }
+    .error-info p { font-size: 13px; color: var(--muted); }
+
+    @media (max-width: 768px) {
+      nav { display: none; }
+      main { padding: 24px 20px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">
+    <h1>IMAP REST</h1>
+    <p>v1.0.0</p>
+  </div>
+
+  <div class="section-label">Generale</div>
+  <a href="#health" class="active"><span class="badge badge-get">GET</span> /health</a>
+  <a href="#folders"><span class="badge badge-post">POST</span> /folders</a>
+
+  <div class="section-label">Messaggi</div>
+  <a href="#list"><span class="badge badge-post">POST</span> /messages/list</a>
+  <a href="#get"><span class="badge badge-post">POST</span> /messages/get</a>
+  <a href="#search"><span class="badge badge-post">POST</span> /messages/search</a>
+  <a href="#delete"><span class="badge badge-post">POST</span> /messages/delete</a>
+  <a href="#move"><span class="badge badge-post">POST</span> /messages/move</a>
+  <a href="#flag"><span class="badge badge-post">POST</span> /messages/flag</a>
+  <a href="#send"><span class="badge badge-post">POST</span> /messages/send</a>
+
+  <div class="section-label">Riferimento</div>
+  <a href="#errors">Errori</a>
+</nav>
+
+<main>
+  <div class="page-header">
+    <h1>IMAP REST API</h1>
+    <p>API REST per operazioni IMAP/SMTP. Progettata per integrazione con n8n via HTTP Request node.</p>
+
+    <div class="base-url">
+      <label>Base URL</label>
+      <code>http://localhost:8000</code>
+    </div>
+
+    <div class="auth-box" style="margin-top:16px">
+      <div class="icon">🔑</div>
+      <div>
+        <h3>Autenticazione</h3>
+        <p>Ogni richiesta (tranne <code>/health</code>) richiede l'header <code>Authorization: Bearer &lt;token&gt;</code>.<br>
+        Il token deve corrispondere a uno di quelli configurati in <code>API_TOKENS</code> (dashboard o env). Se <code>API_TOKENS</code> è vuoto, gli endpoint restano aperti (solo uso locale/rete fidata).</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Account credentials -->
+  <div class="common-fields">
+    <h3>Account — credenziali server-side</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px">Le credenziali non si passano nella request. Ogni endpoint accetta <code>"account": "&lt;nome&gt;"</code>; il server risolve le variabili d'ambiente corrispondenti.</p>
+    <table>
+      <thead>
+        <tr><th>Variabile</th><th>Default</th><th>Descrizione</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>IMAP_&lt;ACCOUNT&gt;_HOST</code></td><td><span class="req">richiesto</span></td><td>Hostname IMAP</td></tr>
+        <tr><td><code>IMAP_&lt;ACCOUNT&gt;_PORT</code></td><td><code>993</code></td><td>Porta IMAP</td></tr>
+        <tr><td><code>IMAP_&lt;ACCOUNT&gt;_USERNAME</code></td><td><span class="req">richiesto</span></td><td>Utente IMAP</td></tr>
+        <tr><td><code>IMAP_&lt;ACCOUNT&gt;_PASSWORD</code></td><td><span class="req">richiesto</span></td><td>Password IMAP</td></tr>
+        <tr><td><code>IMAP_&lt;ACCOUNT&gt;_SSL</code></td><td><code>true</code></td><td>SSL/TLS</td></tr>
+        <tr><td><code>SMTP_&lt;ACCOUNT&gt;_HOST</code></td><td><span class="req">richiesto</span></td><td>Hostname SMTP</td></tr>
+        <tr><td><code>SMTP_&lt;ACCOUNT&gt;_PORT</code></td><td><code>587</code></td><td>Porta SMTP</td></tr>
+        <tr><td><code>SMTP_&lt;ACCOUNT&gt;_USERNAME</code></td><td><span class="req">richiesto</span></td><td>Utente SMTP</td></tr>
+        <tr><td><code>SMTP_&lt;ACCOUNT&gt;_PASSWORD</code></td><td><span class="req">richiesto</span></td><td>Password SMTP</td></tr>
+        <tr><td><code>SMTP_&lt;ACCOUNT&gt;_STARTTLS</code></td><td><code>true</code></td><td>STARTTLS</td></tr>
+        <tr><td><code>SMTP_&lt;ACCOUNT&gt;_SSL</code></td><td><code>false</code></td><td>SSL diretto (porta 465)</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:12px;color:var(--muted);margin-top:10px">Il nome account viene convertito in maiuscolo: <code>"danilo"</code> → <code>IMAP_DANILO_HOST</code>. Account non configurato → <code>400</code>.</p>
+  </div>
+
+  <!-- Health -->
+  <div class="endpoint" id="health">
+    <div class="endpoint-header">
+      <span class="method method-get">GET</span>
+      <h2>/health</h2>
+    </div>
+    <p class="endpoint-desc">Liveness check. Non richiede autenticazione.</p>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'health-resp')">Response</button>
+      </div>
+      <div id="health-resp" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre><span class="k">{</span> <span class="s">"status"</span>: <span class="s">"ok"</span> <span class="k">}</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">Cartelle</div>
+
+  <!-- Folders -->
+  <div class="endpoint" id="folders">
+    <div class="endpoint-header">
+      <span class="method method-post">POST</span>
+      <h2>/folders</h2>
+    </div>
+    <p class="endpoint-desc">Lista tutte le cartelle IMAP dell'account.</p>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'folders-body')">Body</button>
+        <button class="tab-btn" onclick="switchTab(this, 'folders-resp')">Response</button>
+      </div>
+      <div id="folders-body" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>application/json</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"account"</span>: <span class="s">"danilo"</span>
+}</pre>
+        </div>
+      </div>
+      <div id="folders-resp" class="tab-panel">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"folders"</span>: [<span class="s">"INBOX"</span>, <span class="s">"Sent"</span>, <span class="s">"Trash"</span>, <span class="s">"Spam"</span>]
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">Messaggi</div>
+
+  <!-- List -->
+  <div class="endpoint" id="list">
+    <div class="endpoint-header">
+      <span class="method method-post">POST</span>
+      <h2>/messages/list</h2>
+    </div>
+    <p class="endpoint-desc">Recupera gli header di tutti i messaggi a partire da un UID. Utile per sincronizzazione incrementale: passa <code>since_uid</code> per ottenere solo i messaggi nuovi rispetto all'ultima lettura.</p>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'list-body')">Body</button>
+        <button class="tab-btn" onclick="switchTab(this, 'list-fields')">Campi</button>
+        <button class="tab-btn" onclick="switchTab(this, 'list-resp')">Response</button>
+      </div>
+      <div id="list-body" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>application/json</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"account"</span>:   <span class="s">"danilo"</span>,
+  <span class="k">"folder"</span>:    <span class="s">"INBOX"</span>,
+  <span class="k">"since_uid"</span>: <span class="s">"1040"</span>,
+  <span class="k">"limit"</span>:     <span class="n">100</span>
+}</pre>
+        </div>
+      </div>
+      <div id="list-fields" class="tab-panel">
+        <table>
+          <thead><tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr></thead>
+          <tbody>
+            <tr><td><code>folder</code></td><td>string</td><td><code>"INBOX"</code></td><td>Cartella da listare</td></tr>
+            <tr><td><code>since_uid</code></td><td>string</td><td><code>null</code> (tutti)</td><td>Ritorna solo messaggi con UID &ge; questo valore</td></tr>
+            <tr><td><code>limit</code></td><td>int</td><td><code>100</code></td><td>Max messaggi; <code>null</code>/assente = 100, negativo = tutti</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="list-resp" class="tab-panel">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"folder"</span>:    <span class="s">"INBOX"</span>,
+  <span class="k">"since_uid"</span>: <span class="s">"1040"</span>,
+  <span class="k">"count"</span>:     <span class="n">3</span>,
+  <span class="k">"messages"</span>: [
+    {
+      <span class="k">"uid"</span>:        <span class="s">"1040"</span>,
+      <span class="k">"message_id"</span>: <span class="s">"&lt;abc@mail.com&gt;"</span>,
+      <span class="k">"from"</span>:       <span class="s">"Mittente &lt;m@example.com&gt;"</span>,
+      <span class="k">"to"</span>:         <span class="s">"tuo@email.com"</span>,
+      <span class="k">"cc"</span>:         <span class="s">""</span>,
+      <span class="k">"subject"</span>:    <span class="s">"Oggetto"</span>,
+      <span class="k">"date"</span>:       <span class="s">"Mon, 1 Jan 2025 10:00:00 +0100"</span>,
+      <span class="k">"flags"</span>:      [<span class="s">"\\Seen"</span>],
+      <span class="k">"size"</span>:       <span class="n">3210</span>
+    }
+  ]
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Get -->
+  <div class="endpoint" id="get">
+    <div class="endpoint-header">
+      <span class="method method-post">POST</span>
+      <h2>/messages/get</h2>
+    </div>
+    <p class="endpoint-desc">Recupera il contenuto completo di un singolo messaggio: header, corpo testo/HTML e lista allegati.</p>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'get-body')">Body</button>
+        <button class="tab-btn" onclick="switchTab(this, 'get-resp')">Response</button>
+      </div>
+      <div id="get-body" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>application/json</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"account"</span>: <span class="s">"danilo"</span>,
+  <span class="k">"folder"</span>:  <span class="s">"INBOX"</span>,
+  <span class="k">"uid"</span>:     <span class="s">"1042"</span>
+}</pre>
+        </div>
+        <table>
+          <thead><tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr></thead>
+          <tbody>
+            <tr><td><code>folder</code></td><td>string</td><td><code>"INBOX"</code></td><td>Cartella contenente il messaggio</td></tr>
+            <tr><td><code>uid</code></td><td>string</td><td><span class="req">richiesto</span></td><td>UID del messaggio</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="get-resp" class="tab-panel">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"uid"</span>:        <span class="s">"1042"</span>,
+  <span class="k">"message_id"</span>: <span class="s">"&lt;abc123@mail.com&gt;"</span>,
+  <span class="k">"from"</span>:       <span class="s">"Mittente &lt;m@example.com&gt;"</span>,
+  <span class="k">"to"</span>:         <span class="s">"tuo@email.com"</span>,
+  <span class="k">"cc"</span>:         <span class="s">""</span>,
+  <span class="k">"subject"</span>:    <span class="s">"Fattura marzo"</span>,
+  <span class="k">"date"</span>:       <span class="s">"Mon, 1 Jan 2025 10:00:00 +0100"</span>,
+  <span class="k">"flags"</span>:      [<span class="s">"\\Seen"</span>],
+  <span class="k">"body_text"</span>:  <span class="s">"Testo in chiaro del messaggio..."</span>,
+  <span class="k">"body_html"</span>:  <span class="s">"&lt;html&gt;...&lt;/html&gt;"</span>,
+  <span class="k">"attachments"</span>: [
+    {
+      <span class="k">"filename"</span>:     <span class="s">"fattura.pdf"</span>,
+      <span class="k">"content_type"</span>: <span class="s">"application/pdf"</span>,
+      <span class="k">"size"</span>:         <span class="n">48210</span>
+    }
+  ]
+}</pre>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin-top:8px">404 se l'UID non esiste nella cartella. <code>body_text</code> e <code>body_html</code> sono <code>null</code> se la parte corrispondente non è presente. Gli allegati non includono il contenuto binario — solo metadati.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="endpoint" id="search">
+    <div class="endpoint-header">
+      <span class="method method-post">POST</span>
+      <h2>/messages/search</h2>
+    </div>
+    <p class="endpoint-desc">Cerca messaggi in una cartella. Restituisce i più recenti fino al limite impostato.</p>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'search-body')">Body</button>
+        <button class="tab-btn" onclick="switchTab(this, 'search-fields')">Campi</button>
+        <button class="tab-btn" onclick="switchTab(this, 'search-criteria')">Criteri</button>
+        <button class="tab-btn" onclick="switchTab(this, 'search-resp')">Response</button>
+      </div>
+      <div id="search-body" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>application/json</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"account"</span>:  <span class="s">"danilo"</span>,
+  <span class="k">"folder"</span>:   <span class="s">"INBOX"</span>,
+  <span class="k">"limit"</span>:    <span class="n">50</span>,
+  <span class="k">"criteria"</span>: {
+    <span class="k">"unseen"</span>:  <span class="b">true</span>,
+    <span class="k">"from"</span>:    <span class="s">"mittente@example.com"</span>,
+    <span class="k">"subject"</span>: <span class="s">"fattura"</span>,
+    <span class="k">"since"</span>:   <span class="s">"01-Jan-2025"</span>,
+    <span class="k">"before"</span>:  <span class="s">"01-Jun-2025"</span>
+  }
+}</pre>
+        </div>
+      </div>
+      <div id="search-fields" class="tab-panel">
+        <table>
+          <thead><tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr></thead>
+          <tbody>
+            <tr><td><code>folder</code></td><td>string</td><td><code>"INBOX"</code></td><td>Cartella da cercare</td></tr>
+            <tr><td><code>limit</code></td><td>int</td><td><code>50</code></td><td>Max messaggi restituiti</td></tr>
+            <tr><td><code>criteria</code></td><td>object</td><td><code>{}</code> (ALL)</td><td>Criteri di ricerca</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="search-criteria" class="tab-panel">
+        <table>
+          <thead><tr><th>Chiave</th><th>Tipo</th><th>Descrizione</th></tr></thead>
+          <tbody>
+            <tr><td><code>unseen</code></td><td>bool</td><td>Solo messaggi non letti</td></tr>
+            <tr><td><code>seen</code></td><td>bool</td><td>Solo messaggi letti</td></tr>
+            <tr><td><code>from</code></td><td>string</td><td>Filtro mittente</td></tr>
+            <tr><td><code>to</code></td><td>string</td><td>Filtro destinatario</td></tr>
+            <tr><td><code>subject</code></td><td>string</td><td>Filtro oggetto</td></tr>
+            <tr><td><code>since</code></td><td>string</td><td>Dopo data — formato <code>DD-Mon-YYYY</code> (es. <code>01-Jan-2025</code>)</td></tr>
+            <tr><td><code>before</code></td><td>string</td><td>Prima di data — stesso formato</td></tr>
+            <tr><td><code>body</code></td><td>string</td><td>Testo nel corpo del messaggio</td></tr>
+            <tr><td><code>raw</code></td><td>string</td><td>Stringa IMAP grezza (es. <code>"UID 100:200"</code>)</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:12px;color:var(--muted)">Più criteri vengono combinati con AND. Omettere <code>criteria</code> o passare <code>{}</code> restituisce tutti i messaggi (ALL).</p>
+      </div>
+      <div id="search-resp" class="tab-panel">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"folder"</span>:   <span class="s">"INBOX"</span>,
+  <span class="k">"criteria"</span>: <span class="s">"UNSEEN FROM \"mittente@example.com\""</span>,
+  <span class="k">"count"</span>:    <span class="n">2</span>,
+  <span class="k">"messages"</span>: [
+    {
+      <span class="k">"uid"</span>:        <span class="s">"1042"</span>,
+      <span class="k">"message_id"</span>: <span class="s">"&lt;abc123@mail.com&gt;"</span>,
+      <span class="k">"from"</span>:       <span class="s">"Mittente &lt;mittente@example.com&gt;"</span>,
+      <span class="k">"to"</span>:         <span class="s">"tuo@email.com"</span>,
+      <span class="k">"cc"</span>:         <span class="s">""</span>,
+      <span class="k">"subject"</span>:    <span class="s">"Fattura marzo"</span>,
+      <span class="k">"date"</span>:       <span class="s">"Mon, 1 Jan 2025 10:00:00 +0100"</span>,
+      <span class="k">"flags"</span>:      [],
+      <span class="k">"size"</span>:       <span class="n">4821</span>
+    }
+  ]
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete -->
+  <div class="endpoint" id="delete">
+    <div class="endpoint-header">
+      <span class="method method-post">POST</span>
+      <h2>/messages/delete</h2>
+    </div>
+    <p class="endpoint-desc">Cancella messaggi per UID ed esegue expunge immediato.</p>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'delete-body')">Body</button>
+        <button class="tab-btn" onclick="switchTab(this, 'delete-resp')">Response</button>
+      </div>
+      <div id="delete-body" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>application/json</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"account"</span>: <span class="s">"danilo"</span>,
+  <span class="k">"folder"</span>:  <span class="s">"INBOX"</span>,
+  <span class="k">"uids"</span>:    [<span class="s">"1042"</span>, <span class="s">"1043"</span>]
+}</pre>
+        </div>
+        <table>
+          <thead><tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr></thead>
+          <tbody>
+            <tr><td><code>folder</code></td><td>string</td><td><code>"INBOX"</code></td><td>Cartella contenente i messaggi</td></tr>
+            <tr><td><code>uids</code></td><td>string[]</td><td><span class="req">richiesto</span></td><td>Lista UID da cancellare</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="delete-resp" class="tab-panel">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"deleted"</span>: [<span class="s">"1042"</span>, <span class="s">"1043"</span>]
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Move -->
+  <div class="endpoint" id="move">
+    <div class="endpoint-header">
+      <span class="method method-post">POST</span>
+      <h2>/messages/move</h2>
+    </div>
+    <p class="endpoint-desc">Sposta messaggi in un'altra cartella.</p>
+    <div class="note">Usa il comando IMAP <code>MOVE</code> (RFC 6851) se supportato dal server; altrimenti <code>COPY</code> + <code>DELETE</code> + expunge.</div>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'move-body')">Body</button>
+        <button class="tab-btn" onclick="switchTab(this, 'move-resp')">Response</button>
+      </div>
+      <div id="move-body" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>application/json</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"account"</span>:     <span class="s">"danilo"</span>,
+  <span class="k">"folder"</span>:      <span class="s">"INBOX"</span>,
+  <span class="k">"uids"</span>:        [<span class="s">"1042"</span>],
+  <span class="k">"destination"</span>: <span class="s">"Archivio"</span>
+}</pre>
+        </div>
+        <table>
+          <thead><tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr></thead>
+          <tbody>
+            <tr><td><code>folder</code></td><td>string</td><td><code>"INBOX"</code></td><td>Cartella sorgente</td></tr>
+            <tr><td><code>uids</code></td><td>string[]</td><td><span class="req">richiesto</span></td><td>Lista UID da spostare</td></tr>
+            <tr><td><code>destination</code></td><td>string</td><td><span class="req">richiesto</span></td><td>Cartella destinazione</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="move-resp" class="tab-panel">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"moved"</span>:       [<span class="s">"1042"</span>],
+  <span class="k">"destination"</span>: <span class="s">"Archivio"</span>
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flag -->
+  <div class="endpoint" id="flag">
+    <div class="endpoint-header">
+      <span class="method method-post">POST</span>
+      <h2>/messages/flag</h2>
+    </div>
+    <p class="endpoint-desc">Marca messaggi come letti o non letti.</p>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'flag-body')">Body</button>
+        <button class="tab-btn" onclick="switchTab(this, 'flag-resp')">Response</button>
+      </div>
+      <div id="flag-body" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>application/json</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"account"</span>: <span class="s">"danilo"</span>,
+  <span class="k">"folder"</span>:  <span class="s">"INBOX"</span>,
+  <span class="k">"uids"</span>:    [<span class="s">"1042"</span>, <span class="s">"1043"</span>],
+  <span class="k">"action"</span>:  <span class="s">"read"</span>
+}</pre>
+        </div>
+        <table>
+          <thead><tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr></thead>
+          <tbody>
+            <tr><td><code>folder</code></td><td>string</td><td><code>"INBOX"</code></td><td>Cartella contenente i messaggi</td></tr>
+            <tr><td><code>uids</code></td><td>string[]</td><td><span class="req">richiesto</span></td><td>Lista UID</td></tr>
+            <tr><td><code>action</code></td><td>string</td><td><span class="req">richiesto</span></td><td><code>"read"</code> o <code>"unread"</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="flag-resp" class="tab-panel">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"uids"</span>:   [<span class="s">"1042"</span>, <span class="s">"1043"</span>],
+  <span class="k">"action"</span>: <span class="s">"read"</span>
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Send -->
+  <div class="endpoint" id="send">
+    <div class="endpoint-header">
+      <span class="method method-post">POST</span>
+      <h2>/messages/send</h2>
+    </div>
+    <p class="endpoint-desc">Invia un messaggio via SMTP. Credenziali SMTP separate da quelle IMAP.</p>
+
+    <div class="tabs">
+      <div class="tab-list">
+        <button class="tab-btn active" onclick="switchTab(this, 'send-body')">Body</button>
+        <button class="tab-btn" onclick="switchTab(this, 'send-fields')">Campi</button>
+        <button class="tab-btn" onclick="switchTab(this, 'send-resp')">Response</button>
+      </div>
+      <div id="send-body" class="tab-panel active">
+        <div class="code-block">
+          <div class="code-header"><span>application/json</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"account"</span>:   <span class="s">"danilo"</span>,
+  <span class="k">"from_addr"</span>: <span class="s">"tuo@email.com"</span>,
+  <span class="k">"to"</span>:        [<span class="s">"destinatario@example.com"</span>],
+  <span class="k">"cc"</span>:        [<span class="s">"copia@example.com"</span>],
+  <span class="k">"bcc"</span>:       [<span class="s">"nascosto@example.com"</span>],
+  <span class="k">"subject"</span>:   <span class="s">"Oggetto"</span>,
+  <span class="k">"body"</span>:      <span class="s">"Testo del messaggio"</span>,
+  <span class="k">"html"</span>:      <span class="b">false</span>
+}</pre>
+        </div>
+      </div>
+      <div id="send-fields" class="tab-panel">
+        <table>
+          <thead><tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr></thead>
+          <tbody>
+            <tr><td><code>from_addr</code></td><td>string</td><td><span class="req">richiesto</span></td><td>Indirizzo mittente</td></tr>
+            <tr><td><code>to</code></td><td>string[]</td><td><span class="req">richiesto</span></td><td>Destinatari</td></tr>
+            <tr><td><code>cc</code></td><td>string[]</td><td><code>[]</code></td><td>CC</td></tr>
+            <tr><td><code>bcc</code></td><td>string[]</td><td><code>[]</code></td><td>BCC</td></tr>
+            <tr><td><code>subject</code></td><td>string</td><td><span class="req">richiesto</span></td><td>Oggetto</td></tr>
+            <tr><td><code>body</code></td><td>string</td><td><span class="req">richiesto</span></td><td>Corpo del messaggio</td></tr>
+            <tr><td><code>html</code></td><td>bool</td><td><code>false</code></td><td>Corpo in formato HTML</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:12px;color:var(--muted)">Le credenziali SMTP (host, porta, username, password, starttls, ssl) vengono risolte da <code>SMTP_&lt;ACCOUNT&gt;_*</code> nel <code>.env</code>.</p>
+      </div>
+      <div id="send-resp" class="tab-panel">
+        <div class="code-block">
+          <div class="code-header"><span>200 OK</span><button class="copy-btn" onclick="copyCode(this)">Copia</button></div>
+          <pre>{
+  <span class="k">"sent"</span>: <span class="b">true</span>,
+  <span class="k">"to"</span>:   [<span class="s">"destinatario@example.com"</span>],
+  <span class="k">"cc"</span>:   [<span class="s">"copia@example.com"</span>],
+  <span class="k">"bcc"</span>:  [<span class="s">"nascosto@example.com"</span>]
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Errors -->
+  <div class="section-title">Errori</div>
+  <div class="endpoint" id="errors">
+    <div class="error-grid">
+      <div class="error-code">401</div>
+      <div class="error-info">
+        <h4>Token Bearer assente o non valido</h4>
+        <p>Header <code>Authorization: Bearer &lt;token&gt;</code> mancante o diverso da uno dei token configurati in <code>API_TOKENS</code>.</p>
+        <div class="code-block" style="margin-top:10px">
+          <pre>{ <span class="k">"detail"</span>: <span class="s">"Invalid or missing API token"</span> }</pre>
+        </div>
+      </div>
+
+      <div class="error-code">400</div>
+      <div class="error-info">
+        <h4>Parametro non valido / account non configurato</h4>
+        <p>Account non presente nel <code>.env</code>, oppure <code>action</code> in <code>/messages/flag</code> diverso da <code>"read"</code>/<code>"unread"</code>.</p>
+        <div class="code-block" style="margin-top:10px">
+          <pre>{ <span class="k">"detail"</span>: <span class="s">"IMAP account 'xyz' not configured"</span> }</pre>
+        </div>
+      </div>
+
+      <div class="error-code">500</div>
+      <div class="error-info">
+        <h4>Errore IMAP / SMTP</h4>
+        <p>Credenziali errate, server non raggiungibile, cartella inesistente, UID non trovato.</p>
+        <div class="code-block" style="margin-top:10px">
+          <pre>{ <span class="k">"detail"</span>: <span class="s">"[AUTHENTICATIONFAILED] Invalid credentials"</span> }</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+  function switchTab(btn, panelId) {
+    const tabs = btn.closest('.tabs');
+    tabs.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    tabs.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(panelId).classList.add('active');
+  }
+
+  function copyCode(btn) {
+    const pre = btn.closest('.code-block').querySelector('pre');
+    navigator.clipboard.writeText(pre.innerText).then(() => {
+      btn.textContent = 'Copiato!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copia'; btn.classList.remove('copied'); }, 1500);
+    });
+  }
+
+  // Sidebar active link on scroll
+  const endpoints = document.querySelectorAll('.endpoint[id]');
+  const navLinks  = document.querySelectorAll('nav a[href^="#"]');
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navLinks.forEach(l => l.classList.remove('active'));
+        const active = document.querySelector(`nav a[href="#${e.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  endpoints.forEach(el => observer.observe(el));
+</script>
+</body>
+</html>

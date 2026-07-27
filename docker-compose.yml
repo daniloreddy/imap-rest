@@ -1,0 +1,16 @@
+services:
+  imap-rest:
+    build: .
+    container_name: imap-rest
+    restart: unless-stopped
+    ports:
+      - "${HOST:-127.0.0.1}:${PORT:-8000}:${PORT:-8000}"  # HOST=0.0.0.0 per LAN / reverse proxy / esposizione diretta
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=${TZ:-UTC}
+      - PORT=${PORT:-8000}
+      - ENV_FILE=/app/hostcfg/.env
+      - NICEGUI_STORAGE_PATH=/app/data/.nicegui
+    volumes:
+      - .:/app/hostcfg
+      - ./data:/app/data

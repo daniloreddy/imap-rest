@@ -1,0 +1,17 @@
+.env
+.git
+.gitignore
+data/
+debug/
+logs/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.nicegui/
+node_modules/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/

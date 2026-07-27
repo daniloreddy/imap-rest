@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IMAP REST — Accesso</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #121212; color: #E0E0E0;
+  font-family: system-ui, -apple-system, sans-serif;
+  display: flex; align-items: center; justify-content: center; min-height: 100vh;
+}
+.card {
+  background: #1E1E1E; border: 1px solid #2A2A2A; border-radius: 8px;
+  padding: 32px; width: 360px; box-shadow: 0 4px 24px rgba(0,0,0,.4);
+}
+h2 { text-align: center; font-size: 1.25rem; color: #E0E0E0; margin-bottom: 6px; }
+.sub { text-align: center; color: #616161; font-size: 13px; margin-bottom: 24px; }
+.error {
+  background: #3A1B1B; color: #EF9A9A; border-radius: 6px;
+  padding: 10px 12px; font-size: 13px; margin-bottom: 16px; display: none;
+}
+label { display: block; font-size: 12px; color: #616161; margin-bottom: 4px; font-weight: 500; }
+input[type=password] {
+  width: 100%; padding: 10px 12px; background: #121212;
+  border: 1px solid #2A2A2A; border-radius: 6px; color: #E0E0E0; font-size: 14px;
+  margin-bottom: 16px; transition: border-color .15s;
+}
+input[type=password]:focus { outline: none; border-color: #90CAF9; box-shadow: 0 0 0 3px rgba(144,202,249,.12); }
+button {
+  width: 100%; padding: 10px; background: #90CAF9; color: #121212;
+  border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;
+  transition: background .15s;
+}
+button:hover { background: #64B5F6; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>IMAP REST</h2>
+  <p class="sub">Inserisci la password per continuare</p>
+  <div id="err" class="error"></div>
+  <form method="POST" action="/auth/login">
+    <label for="pw">Password</label>
+    <input type="password" id="pw" name="password" placeholder="••••••••" autofocus>
+    <button type="submit">Accedi</button>
+  </form>
+</div>
+<script>
+const ERROR_MESSAGES = {
+  invalid: 'Password errata. Riprova.',
+  blocked: 'Troppi tentativi falliti da questo IP. Riprova tra qualche minuto.',
+  nopassword: 'Nessuna password configurata per questo server.',
+};
+const errorCode = new URLSearchParams(location.search).get('error');
+if (errorCode) {
+  const el = document.getElementById('err');
+  el.textContent = ERROR_MESSAGES[errorCode] || ERROR_MESSAGES.invalid;
+  el.style.display = 'block';
+}
+</script>
+</body>
+</html>
