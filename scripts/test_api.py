@@ -8,11 +8,21 @@ import urllib.request
 from typing import Any
 
 
-class ApiError(Exception):
-    def __init__(self, status: int, body: str) -> None:
-        super().__init__(f"HTTP {status}: {body}")
-        self.status = status
-        self.body = body
+class ConnectionFailedError(Exception):
+    pass
+
+
+def _parse_body(raw: bytes) -> Any:
+    """Best-effort JSON decode. A non-JSON body (HTML error page from a reverse
+    proxy/tunnel in front of the app, empty body, ...) is returned as raw text
+    instead of raising — the caller can still report status + text."""
+    text = raw.decode("utf-8", errors="replace")
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
 
 
 def call(base_url: str, method: str, path: str, token: str | None, payload: dict[str, Any] | None = None) -> Any:
@@ -24,11 +34,11 @@ def call(base_url: str, method: str, path: str, token: str | None, payload: dict
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            body = resp.read().decode("utf-8")
-            return resp.status, json.loads(body) if body else None
+            return resp.status, _parse_body(resp.read())
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8")
-        return exc.code, json.loads(body) if body else None
+        return exc.code, _parse_body(exc.read())
+    except urllib.error.URLError as exc:
+        raise ConnectionFailedError(f"could not reach {url}: {exc.reason}") from exc
 
 
 class Reporter:
@@ -58,6 +68,20 @@ def main() -> int:
 
     report = Reporter()
 
+    try:
+        _run_checks(args, report)
+    except ConnectionFailedError as exc:
+        print(f"[ERROR] {exc}")
+        return 2
+
+    if report.failures:
+        print(f"{report.failures} check(s) failed.")
+        return 1
+    print("All checks passed.")
+    return 0
+
+
+def _run_checks(args: argparse.Namespace, report: Reporter) -> None:
     status, body = call(args.base_url, "GET", "/health", None)
     report.step("GET /health", status, 200, str(body))
 
@@ -124,12 +148,6 @@ def main() -> int:
     print("--- /messages/move, /messages/delete and /messages/send are not exercised automatically ---")
     print("--- (they mutate the mailbox / send real email) — test those manually with real data. ---")
     print()
-
-    if report.failures:
-        print(f"{report.failures} check(s) failed.")
-        return 1
-    print("All checks passed.")
-    return 0
 
 
 if __name__ == "__main__":
