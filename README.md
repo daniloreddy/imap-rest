@@ -21,6 +21,13 @@ repo aggiunge il cablaggio applicativo attorno a quel pacchetto.
   risolte da variabili d'ambiente `IMAP_<ACCOUNT>_*` / `SMTP_<ACCOUNT>_*`.
 - **Dashboard** (`/ui`, cookie/JWT auth) — richieste totali/ok/errori, durata
   media, storico ultime chiamate con endpoint e account coinvolti.
+- **Client mail integrato** (`/ui/mail`) — selettore account/cartella, lista
+  messaggi e lettura (corpo + allegati), sola lettura, tramite chiamate HTTP
+  reali alla stessa API REST (nessun accesso diretto a `app/mail.py`).
+- **Test API on-demand** (`/ui/api-test`) — un pulsante nella dashboard che
+  esegue gli stessi controlli end-to-end di `scripts/test_api.py` (health,
+  folders, list, search, get, più un test negativo su account inesistente) e
+  mostra un esito verde/rosso per ciascuno, senza aprire un terminale.
 - **Auth API opzionale** — `Authorization: Bearer <token>` contro `API_TOKENS`
   (comma-separated); vuoto = API aperta (solo uso locale/rete fidata).
 - **Rate limiting** (`slowapi`), configurabile a runtime da `/ui/config`.
@@ -57,6 +64,10 @@ Script di smoke test end-to-end (stdlib, no dipendenze extra) contro un
 server già in esecuzione — vedi commenti nello script per le opzioni. Non
 esercita `/messages/move`, `/messages/delete`, `/messages/send` (mutano la
 mailbox / inviano email reali): quelle si testano manualmente.
+
+In alternativa, la dashboard (`/ui/api-test`) esegue lo stesso smoke test
+(senza `move`/`delete`/`send`) con un pulsante, senza terminale — comodo per
+verificare rapidamente che l'API funzioni dopo un deploy o una modifica.
 
 ## Configurazione (`.env`)
 
@@ -105,15 +116,19 @@ Esegue `ruff check`, `mypy app` (strict) e `pytest` in sequenza.
 app/
 ├── main.py         # FastAPI + lifespan (config reload, auth purge, metrics init) + auth gate +
 │                   # rate limiting + endpoint IMAP/SMTP + mount NiceGUI
-├── mail.py         # logica IMAP/SMTP pura (no import FastAPI) — modelli richiesta/risposta, operazioni
+├── mail.py         # logica IMAP/SMTP pura (no import FastAPI) — modelli richiesta/risposta, operazioni,
+│                   # enumerazione account configurati (list_configured_accounts)
 ├── config.py       # ConfigManager (redberry_webkit) — RATE_LIMIT, API_TOKENS, REFRESH_*
 ├── metrics.py      # MetricsStore (redberry_webkit) legato a data/metrics.db
 └── ui/
-    ├── router.py   # /login /auth/login /auth/logout (AuthManager)
-    └── pages.py    # dashboard (metriche + storico richieste) + pagina Config
+    ├── router.py     # /login /auth/login /auth/logout (AuthManager)
+    ├── api_client.py # client HTTP interno (httpx, self-loopback su PORT) verso l'API REST,
+    │                 # usato dalle pagine Posta/Test API — non da app/mail.py direttamente
+    └── pages.py      # dashboard (metriche + storico), Posta (/ui/mail, sola lettura),
+                       # Test API (/ui/api-test, smoke test on-demand), Config
 static/login.html   # pagina di login self-contained
 scripts/            # run/checks (bat+sh), set_password.py, test_api.py
-tests/              # unit test su app/mail.py
+tests/              # unit test su app/mail.py e app/ui/api_client.py
 data/               # auth.json, metrics.db, logs/ — gitignored
 ```
 

@@ -33,11 +33,12 @@ Dashboard: `http://localhost:8000/ui` (login with the password set above). API: 
 FastAPI + NiceGUI app, following the `redberry-webapp-template` layout (see `@rules/uvicorn.md`, `@rules/fastapi-auth.md`, `@rules/nicegui.md` in the user's global config):
 
 - `app/main.py` — the entrypoint and the FastAPI app (module-level `app = FastAPI(...)`), auth gate, rate limiting, NiceGUI mount, IMAP/SMTP endpoints.
-- `app/mail.py` — business logic (IMAP/SMTP operations, request/response models). No FastAPI imports — unit-testable in isolation.
+- `app/mail.py` — business logic (IMAP/SMTP operations, request/response models), plus `list_configured_accounts()` (scans `IMAP_<NAME>_HOST` env keys to enumerate configured accounts for the dashboard's account pickers). No FastAPI imports — unit-testable in isolation.
 - `app/config.py` — `ConfigManager` (redberry-webkit), runtime-editable settings (`RATE_LIMIT`, `API_TOKENS`, `REFRESH_ENABLED`, `REFRESH_INTERVAL`, `METRICS_RETENTION_DAYS`), hot-reloaded from `.env`.
 - `app/metrics.py` — `MetricsStore` (redberry-webkit), SQLite-backed log of every API call (timestamp, status, duration, error, and `extra={"endpoint", "account"}`).
 - `app/ui/router.py` — `/login`, `/auth/login`, `/auth/logout` (cookie/JWT session via `AuthManager`).
-- `app/ui/pages.py` — dashboard (`/ui`) showing request metrics/history, and settings (`/ui/config`).
+- `app/ui/api_client.py` — internal `httpx` client that calls the app's own REST endpoints via self-loopback (`http://127.0.0.1:{PORT}`, `PORT` read once from `os.environ` — boot-time-only, same treatment as `HOST`/`TZ`), attaching the first `API_TOKENS` entry as a Bearer token if configured. Used by `app/ui/pages.py`'s "Posta"/"Test API" pages — deliberately goes through HTTP rather than calling `app/mail.py` directly, so those dashboard pages exercise the real API surface.
+- `app/ui/pages.py` — dashboard (`/ui`, request metrics/history), **Posta** (`/ui/mail`, read-only mail client: account/folder pickers, message list, message view with attachments — all via `api_client`), **Test API** (`/ui/api-test`, on-demand button that runs the same checks as `scripts/test_api.py` against a chosen account and shows pass/fail), and settings (`/ui/config`).
 
 **Auth — two independent mechanisms, per `@rules/fastapi-auth.md`:**
 - Dashboard (`/ui/**`): cookie/JWT session, gated by the `_auth_gate` middleware in `app/main.py`. Password set via `python scripts/set_password.py`, stored in `data/auth.json`.
@@ -72,6 +73,8 @@ Account name is uppercased automatically (e.g. `"danilo"` → `IMAP_DANILO_HOST`
 
 All IMAP operations use UID mode (`imap.uid(...)`) for stable message addressing across sessions. Blocking IMAP/SMTP calls run via `asyncio.to_thread` inside the async endpoints (`app/main.py`'s `_run_tracked`), which is also where every call gets logged to `MetricsStore`.
 
+**NiceGUI `@ui.page` response timeout (3s default)**: any `@ui.page` handler must render its initial content quickly — NiceGUI raises `TimeoutError` if the page function hasn't returned within `response_timeout` (3s). `app/ui/pages.py`'s "Posta" page loads folders via a real IMAP round-trip (through `api_client`, itself calling `/folders`), which can exceed that — its initial fetch is scheduled with `ui.timer(0.1, _load_folders, once=True)` *after* the page has rendered, not `await`ed directly in the page function body. Keep this pattern for any future page that fetches over IMAP/SMTP/HTTP on load.
+
 ## Docker
 
 `.github/workflows/docker-publish.yml` builds and pushes the image to `ghcr.io/daniloreddy/imap-rest` on push to `main` and on `v*.*.*` tags. Standard two-file split per `@rules/docker.md`:
@@ -84,3 +87,5 @@ All IMAP operations use UID mode (`imap.uid(...)`) for stable message addressing
 ## Deps
 
 `requirements.txt` pulls `redberry-webkit` from `git+https://github.com/daniloreddy/redberry-webkit.git` (pinned tag) for `ConfigManager`, `MetricsStore`, `AuthManager`, timezone/env-resolver/logging helpers — same shared package used by other redberry web apps, not reimplemented per-project.
+
+`httpx` is a runtime dependency (not dev-only) — `app/ui/api_client.py` uses it to call the app's own REST endpoints from the dashboard pages.

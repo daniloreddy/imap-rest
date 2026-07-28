@@ -4,6 +4,7 @@ import base64
 import email
 import imaplib
 import os
+import re
 import smtplib
 import ssl as ssl_module
 from email.header import decode_header
@@ -161,6 +162,19 @@ def get_imap_credentials(account: str) -> ImapCredentials:
     )
 
 
+_ACCOUNT_ENV_RE = re.compile(r"^IMAP_([A-Za-z0-9_-]+)_HOST$")
+
+
+def list_configured_accounts() -> list[str]:
+    """Scan the environment for IMAP_<NAME>_HOST and return the configured account names, lowercased and sorted."""
+    names = set()
+    for key in os.environ:
+        match = _ACCOUNT_ENV_RE.match(key)
+        if match:
+            names.add(match.group(1).lower())
+    return sorted(names)
+
+
 def get_smtp_config(account: str) -> dict[str, Any]:
     prefix = f"SMTP_{account.upper()}"
     host = os.environ.get(f"{prefix}_HOST")
@@ -300,6 +314,19 @@ def parse_message_envelope(imap: imaplib.IMAP4, uid: str) -> dict[str, Any]:
 # --- Operations (business logic, no FastAPI coupling) ---
 
 
+_LIST_RESPONSE_RE = re.compile(r'^\([^)]*\)\s+(?:"[^"]*"|NIL)\s+(.+)$')
+
+
+def _parse_list_response_name(decoded: str) -> str:
+    # IMAP LIST reply: "(flags) delimiter name" — name is the last whitespace-separated
+    # field but may itself contain spaces if quoted, so split('"')[-1] (previous approach)
+    # returned an empty string whenever the name was quoted (nothing follows the closing
+    # quote). Match the whole trailing field instead, quoted or not.
+    match = _LIST_RESPONSE_RE.match(decoded)
+    name = match.group(1) if match else decoded
+    return name.strip().strip('"')
+
+
 def list_folders(req: ListFoldersRequest) -> dict[str, Any]:
     creds = get_imap_credentials(req.account)
     imap = imap_connect(creds)
@@ -309,10 +336,7 @@ def list_folders(req: ListFoldersRequest) -> dict[str, Any]:
         for f in folders:
             if not isinstance(f, bytes):
                 continue
-            decoded = f.decode()
-            parts = decoded.split('"')
-            name = parts[-1].strip().strip('"') if parts else decoded
-            result.append(name)
+            result.append(_parse_list_response_name(f.decode()))
         return {"folders": result}
     finally:
         imap.logout()

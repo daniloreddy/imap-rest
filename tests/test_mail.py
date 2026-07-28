@@ -344,3 +344,61 @@ def test_imap_connect_passes_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.mail.imaplib.IMAP4_SSL", _FakeImap4Ssl)
     imap_connect(ImapCredentials(host="imap.example.com", username="u", password="p"))
     assert captured["timeout"] == mail._NETWORK_TIMEOUT_S
+
+
+def test_list_configured_accounts_scans_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        mail.os,
+        "environ",
+        {
+            "IMAP_DANILO_HOST": "imap.example.com",
+            "IMAP_WORK_HOST": "imap.work.com",
+            "SMTP_DANILO_HOST": "smtp.example.com",
+            "OTHER_VAR": "x",
+        },
+    )
+    assert mail.list_configured_accounts() == ["danilo", "work"]
+
+
+def test_list_configured_accounts_empty_when_none_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mail.os, "environ", {"OTHER_VAR": "x"})
+    assert mail.list_configured_accounts() == []
+
+
+def test_list_configured_accounts_deduplicates_imap_and_smtp_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An account with both IMAP_*_HOST and SMTP_*_HOST must appear once, not twice.
+    monkeypatch.setattr(
+        mail.os,
+        "environ",
+        {"IMAP_DANILO_HOST": "imap.example.com", "SMTP_DANILO_HOST": "smtp.example.com"},
+    )
+    assert mail.list_configured_accounts() == ["danilo"]
+
+
+def test_list_configured_accounts_ignores_partial_key_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    # IMAP_DANILO_HOSTNAME must not be mistaken for IMAP_DANILO_HOST (anchored regex).
+    monkeypatch.setattr(mail.os, "environ", {"IMAP_DANILO_HOSTNAME": "imap.example.com"})
+    assert mail.list_configured_accounts() == []
+
+
+def test_parse_list_response_name_quoted() -> None:
+    # A quoted folder name previously produced an empty string: split('"')[-1] on
+    # '(\\HasNoChildren) "/" "ARUBA"' returns '' (nothing follows the closing quote).
+    assert mail._parse_list_response_name('(\\HasNoChildren) "/" "ARUBA"') == "ARUBA"
+
+
+def test_parse_list_response_name_quoted_with_spaces() -> None:
+    assert mail._parse_list_response_name('(\\HasNoChildren) "/" "My Folder"') == "My Folder"
+
+
+def test_parse_list_response_name_unquoted() -> None:
+    assert mail._parse_list_response_name('(\\HasNoChildren) "." INBOX') == "INBOX"
+
+
+def test_parse_list_response_name_nil_delimiter() -> None:
+    # RFC 3501: the delimiter can be NIL (no hierarchy separator) instead of a quoted char.
+    assert mail._parse_list_response_name("(\\Noselect) NIL Archive") == "Archive"
+
+
+def test_parse_list_response_name_falls_back_to_raw_on_unexpected_format() -> None:
+    assert mail._parse_list_response_name("not a real IMAP LIST line") == "not a real IMAP LIST line"

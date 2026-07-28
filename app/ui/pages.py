@@ -6,12 +6,15 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+import httpx
 from nicegui import app as ng_app
 from nicegui import ui
 from redberry_webkit.timezone_utils import resolve_timezone
 
+from app import mail
 from app.config import config
 from app.metrics import metrics
+from app.ui import api_client
 
 APP_NAME = "IMAP REST"
 DISPLAY_TZ = resolve_timezone(os.getenv("TZ", "UTC"))
@@ -21,6 +24,8 @@ _RATE_LIMIT_RE = re.compile(r"^\d+/(second|minute|hour|day)$")
 NavItem = tuple[str, str, str]
 NAV_ITEMS: list[NavItem] = [
     ("Dashboard", "dashboard", "/"),
+    ("Posta", "mail", "/mail"),
+    ("Test API", "fact_check", "/api-test"),
     ("Impostazioni", "settings", "/config"),
 ]
 
@@ -165,6 +170,244 @@ async def dashboard_page() -> None:
                 await _render()
 
         ui.timer(1.0, _tick)
+
+    _footer()
+
+
+@ui.page("/mail")
+def mail_page() -> None:
+    dark = _page_setup("Posta")
+    _header("Posta", NAV_ITEMS, current="Posta", dark=dark, extra_actions=_logout_action)
+
+    accounts = mail.list_configured_accounts()
+
+    with ui.column().classes("q-pa-md full-width"):
+        if not accounts:
+            ui.label("Nessun account configurato (manca IMAP_<NOME>_HOST in .env).").classes("text-negative")
+
+        with ui.row().classes("q-gutter-md items-end"):
+            account_select = ui.select(
+                accounts, label="Account", value=accounts[0] if accounts else None
+            ).classes("w-48")
+            folder_select = ui.select([], label="Cartella").classes("w-64")
+            refresh_button = ui.button(icon="refresh").props("flat round color=primary").tooltip("Aggiorna")
+
+        table_container = ui.column().classes("full-width")
+
+        async def _open_message(account: str, folder: str, uid: str) -> None:
+            try:
+                status, body = await api_client.get_message(account, folder, uid)
+            except httpx.RequestError as exc:
+                ui.notify(f"Errore di rete: {exc}", color="negative")
+                return
+            if status != 200 or not isinstance(body, dict):
+                ui.notify(f"Errore nel recupero messaggio (HTTP {status})", color="negative")
+                return
+            with ui.dialog() as dialog, ui.card().classes("full-width"):
+                ui.label(body.get("subject") or "(nessun oggetto)").classes("text-h6 text-weight-bold")
+                ui.label(f"Da: {body.get('from', '')}").classes("text-caption text-grey-6")
+                ui.label(f"A: {body.get('to', '')}").classes("text-caption text-grey-6")
+                ui.label(f"Data: {body.get('date', '')}").classes("text-caption text-grey-6")
+                ui.separator()
+                if body.get("body_html"):
+                    ui.html(body["body_html"]).classes("full-width")
+                elif body.get("body_text"):
+                    ui.label(body["body_text"]).style("white-space: pre-wrap")
+                else:
+                    ui.label("(nessun corpo testuale)").classes("text-grey-6")
+                attachments = body.get("attachments", [])
+                if attachments:
+                    ui.separator()
+                    ui.label("Allegati").classes("text-caption text-grey-6 text-uppercase")
+                    for att in attachments:
+                        ui.label(f"{att.get('filename', '?')} ({att.get('size', 0)} byte)")
+                ui.button("Chiudi", on_click=dialog.close).props("flat")
+            dialog.open()
+
+        async def _load_messages() -> None:
+            account = account_select.value
+            folder = folder_select.value
+            table_container.clear()
+            if not account or not folder:
+                return
+            try:
+                status, body = await api_client.list_messages(account, folder, limit=50)
+            except httpx.RequestError as exc:
+                with table_container:
+                    ui.label(f"Errore di rete: {exc}").classes("text-negative")
+                return
+            if status != 200:
+                with table_container:
+                    ui.label(f"Errore nel recupero messaggi (HTTP {status})").classes("text-negative")
+                return
+            messages = body.get("messages", []) if isinstance(body, dict) else []
+            with table_container:
+                if not messages:
+                    ui.label("Nessun messaggio in questa cartella.").classes("text-grey-6")
+                    return
+                rows = [
+                    {
+                        "uid": m["uid"],
+                        "date": m.get("date", ""),
+                        "from": m.get("from", ""),
+                        "subject": m.get("subject", ""),
+                        "flags": ", ".join(m.get("flags", [])),
+                    }
+                    for m in messages
+                ]
+                tbl = ui.table(
+                    columns=[
+                        {"name": "date", "label": "Data", "field": "date"},
+                        {"name": "from", "label": "Da", "field": "from"},
+                        {"name": "subject", "label": "Oggetto", "field": "subject"},
+                        {"name": "flags", "label": "Flags", "field": "flags"},
+                    ],
+                    rows=rows,
+                    row_key="uid",
+                ).classes("full-width cursor-pointer")
+
+                async def _on_row_click(e: Any) -> None:
+                    # Quasar's row-click emits (evt, row, index) — e.args mirrors that order.
+                    row = e.args[1]
+                    await _open_message(account, folder, row["uid"])
+
+                tbl.on("rowClick", _on_row_click)
+
+        async def _load_folders(_: Any = None) -> None:
+            account = account_select.value
+            table_container.clear()
+            if not account:
+                folder_select.set_options([])
+                return
+            try:
+                status, body = await api_client.folders(account)
+            except httpx.RequestError as exc:
+                with table_container:
+                    ui.label(f"Errore di rete: {exc}").classes("text-negative")
+                return
+            if status != 200:
+                with table_container:
+                    ui.label(f"Errore nel recupero cartelle (HTTP {status})").classes("text-negative")
+                return
+            names = body.get("folders", []) if isinstance(body, dict) else []
+            folder_select.set_options(names, value="INBOX" if "INBOX" in names else (names[0] if names else None))
+            await _load_messages()
+
+        account_select.on_value_change(_load_folders)
+        folder_select.on_value_change(lambda _: _load_messages())
+        refresh_button.on_click(_load_messages)
+
+        if accounts:
+            # Not `await`ed here: this is a real IMAP round-trip and @ui.page has a
+            # 3s deadline to build the initial response (nicegui/page.py response_timeout)
+            # — a slow/remote mailbox blows past that and the page never loads. Fire it
+            # once, shortly after the page has already rendered.
+            ui.timer(0.1, _load_folders, once=True)
+
+    _footer()
+
+
+@ui.page("/api-test")
+def api_test_page() -> None:
+    dark = _page_setup("Test API")
+    _header("Test API", NAV_ITEMS, current="Test API", dark=dark, extra_actions=_logout_action)
+
+    accounts = mail.list_configured_accounts()
+
+    with ui.column().classes("q-pa-md full-width"):
+        if not accounts:
+            ui.label("Nessun account configurato (manca IMAP_<NOME>_HOST in .env).").classes("text-negative")
+
+        with ui.row().classes("q-gutter-md items-end"):
+            account_select = ui.select(
+                accounts, label="Account", value=accounts[0] if accounts else None
+            ).classes("w-48")
+            folder_input = ui.input("Cartella", value="INBOX").classes("w-48")
+            run_button = ui.button("Esegui test API", icon="play_arrow").props("color=primary")
+
+        results_container = ui.column().classes("full-width")
+
+        async def _run_tests() -> None:
+            account = account_select.value
+            folder = folder_input.value.strip() or "INBOX"
+            if not account:
+                ui.notify("Seleziona un account", color="warning")
+                return
+
+            run_button.props("loading")
+            checks: list[dict[str, str]] = []
+
+            def _add(name: str, esito: str, detail: str = "") -> None:
+                checks.append(
+                    {"id": str(len(checks)), "check": name, "esito": esito, "dettaglio": detail}
+                )
+
+            def _add_http(name: str, status: int, expected: int, detail: str = "") -> None:
+                esito = "ok" if status == expected else "error"
+                dettaglio = f"HTTP {status}" + (f" — {detail}" if detail else "")
+                _add(name, esito, dettaglio)
+
+            try:
+                status, body = await api_client.health()
+                _add_http("GET /health", status, 200, str(body))
+
+                status, body = await api_client.folders(account)
+                folders_list = body.get("folders") if isinstance(body, dict) else None
+                _add_http("POST /folders", status, 200, f"folders={folders_list}")
+
+                status, body = await api_client.list_messages(account, folder, limit=5)
+                count = body.get("count") if isinstance(body, dict) else None
+                _add_http("POST /messages/list", status, 200, f"count={count}")
+                messages = body.get("messages", []) if status == 200 and isinstance(body, dict) else []
+
+                status, body = await api_client.search(account, folder, {}, limit=3)
+                count = body.get("count") if isinstance(body, dict) else None
+                _add_http("POST /messages/search", status, 200, f"count={count}")
+
+                if messages:
+                    uid = messages[0]["uid"]
+                    status, body = await api_client.get_message(account, folder, uid)
+                    subject = body.get("subject", "") if isinstance(body, dict) else ""
+                    _add_http(f"POST /messages/get (uid={uid})", status, 200, f"subject={subject!r}")
+                else:
+                    _add(
+                        "POST /messages/get",
+                        "skip",
+                        f"nessun messaggio nella cartella '{folder}'",
+                    )
+
+                status, body = await api_client.folders("__unknown_account__")
+                _add_http("POST /folders account sconosciuto", status, 400, str(body))
+            except httpx.RequestError as exc:
+                ui.notify(f"Impossibile contattare l'API: {exc}", color="negative")
+                run_button.props(remove="loading")
+                return
+
+            run_button.props(remove="loading")
+            results_container.clear()
+            with results_container:
+                tbl = ui.table(
+                    columns=[
+                        {"name": "check", "label": "Check", "field": "check"},
+                        {"name": "esito", "label": "Esito", "field": "esito"},
+                        {"name": "dettaglio", "label": "Dettaglio", "field": "dettaglio"},
+                    ],
+                    rows=checks,
+                    row_key="id",
+                ).classes("full-width")
+                tbl.add_slot(
+                    "body-cell-esito",
+                    """
+                    <q-td :props="props">
+                      <q-badge
+                        :color="props.value === 'ok' ? 'positive' : props.value === 'skip' ? 'warning' : 'negative'"
+                        :label="props.value"
+                      />
+                    </q-td>
+                    """,
+                )
+
+        run_button.on_click(_run_tests)
 
     _footer()
 
