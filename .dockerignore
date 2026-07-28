@@ -12,6 +12,8 @@ __pycache__/
 *.log
 .nicegui/
 node_modules/
+.pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.pytest_cache/
+.coverage
+htmlcov/

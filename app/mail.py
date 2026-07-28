@@ -9,9 +9,9 @@ import ssl as ssl_module
 from email.header import decode_header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 
 class AccountNotConfiguredError(Exception):
@@ -33,7 +33,32 @@ class InvalidFlagActionError(Exception):
         self.action = action
 
 
+class InvalidUidError(Exception):
+    def __init__(self, uid: str) -> None:
+        super().__init__(f"UID must be a positive integer, got '{uid}'")
+        self.uid = uid
+
+
+class InvalidImapValueError(ValueError):
+    """A value destined for an IMAP command line contains CR/LF (protocol injection)."""
+
+
+class InvalidHeaderValueError(Exception):
+    def __init__(self, field: str, value: str) -> None:
+        super().__init__(f"{field} must not contain CR or LF")
+        self.field = field
+        self.value = value
+
+
 # --- Models ---
+
+_ACCOUNT_PATTERN = r"^[a-zA-Z0-9_-]+$"
+_MAX_FOLDER_LEN = 255
+_MAX_SUBJECT_LEN = 998  # RFC 5322: max length of an unfolded header line
+_MAX_BODY_LEN = 5_000_000  # generous cap for a real email body, bounds worst-case memory use
+_MAX_UID_LEN = 20  # a real IMAP UID is at most 10 digits (32-bit); generous headroom
+
+_UidStr = Annotated[str, Field(max_length=_MAX_UID_LEN)]
 
 
 class ImapCredentials(BaseModel):
@@ -45,7 +70,9 @@ class ImapCredentials(BaseModel):
 
 
 class AccountRequest(BaseModel):
-    account: str
+    # account is uppercased and interpolated into env var names (IMAP_<ACCOUNT>_HOST) —
+    # restrict the charset so it can't be used to probe/read unrelated env vars (REPORT.md H-05).
+    account: str = Field(..., pattern=_ACCOUNT_PATTERN, max_length=64)
 
 
 class ListFoldersRequest(AccountRequest):
@@ -53,57 +80,71 @@ class ListFoldersRequest(AccountRequest):
 
 
 class SearchRequest(AccountRequest):
-    folder: str = "INBOX"
+    folder: str = Field(default="INBOX", max_length=_MAX_FOLDER_LEN)
     criteria: dict[str, Any] = {}
     limit: int = 50
 
 
 class DeleteRequest(AccountRequest):
-    folder: str = "INBOX"
-    uids: list[str]
+    folder: str = Field(default="INBOX", max_length=_MAX_FOLDER_LEN)
+    uids: list[_UidStr]
 
 
 class MoveRequest(AccountRequest):
-    folder: str = "INBOX"
-    uids: list[str]
-    destination: str
+    folder: str = Field(default="INBOX", max_length=_MAX_FOLDER_LEN)
+    uids: list[_UidStr]
+    destination: str = Field(..., max_length=_MAX_FOLDER_LEN)
 
 
 class FlagRequest(AccountRequest):
-    folder: str = "INBOX"
-    uids: list[str]
+    folder: str = Field(default="INBOX", max_length=_MAX_FOLDER_LEN)
+    uids: list[_UidStr]
     action: str  # "read" | "unread"
 
 
 class ListRequest(AccountRequest):
-    folder: str = "INBOX"
+    folder: str = Field(default="INBOX", max_length=_MAX_FOLDER_LEN)
     since_uid: str | None = None
     limit: int | None = 100  # null/assente = 100, negativo = tutti
 
 
 class GetRequest(AccountRequest):
-    folder: str = "INBOX"
-    uid: str
+    folder: str = Field(default="INBOX", max_length=_MAX_FOLDER_LEN)
+    uid: _UidStr
     include_attachments: bool = False
 
 
 class SendRequest(AccountRequest):
-    from_addr: str
-    to: list[str]
-    cc: list[str] = []
-    bcc: list[str] = []
-    subject: str
-    body: str
+    # EmailStr (email-validator) rejects malformed addresses and, as a side effect,
+    # any embedded CR/LF — covers REPORT.md H-08 and most of C-03's header injection
+    # surface at the validation layer, before send_message ever runs.
+    from_addr: EmailStr
+    to: list[EmailStr]
+    cc: list[EmailStr] = []
+    bcc: list[EmailStr] = []
+    subject: str = Field(..., max_length=_MAX_SUBJECT_LEN)
+    body: str = Field(..., max_length=_MAX_BODY_LEN)
     html: bool = False
 
 
 # --- Credential helpers ---
 
 
+_BOOL_ENV_TRUE = {"true", "1", "yes"}
+_BOOL_ENV_FALSE = {"false", "0", "no"}
+
+
 def _bool_env(value: str | None, default: bool) -> bool:
     if value is None:
         return default
-    return value.lower() not in ("false", "0", "no")
+    normalized = value.strip().lower()
+    if normalized in _BOOL_ENV_TRUE:
+        return True
+    if normalized in _BOOL_ENV_FALSE:
+        return False
+    # A typo (e.g. "flase") used to silently fall back to True via `not in false-set` —
+    # for a security-relevant flag (SSL/STARTTLS) failing loud beats guessing a direction.
+    raise ValueError(f"expected a boolean value (true/false/1/0/yes/no), got {value!r}")
 
 
 def get_imap_credentials(account: str) -> ImapCredentials:
@@ -137,15 +178,35 @@ def get_smtp_config(account: str) -> dict[str, Any]:
 
 # --- IMAP helpers ---
 
+# A slow/unresponsive remote server would otherwise block the asyncio.to_thread worker
+# thread indefinitely (REPORT.md H-06) — every socket-level connection gets this timeout.
+_NETWORK_TIMEOUT_S = 30
+
 
 def imap_connect(creds: ImapCredentials) -> imaplib.IMAP4:
     imap: imaplib.IMAP4
     if creds.ssl:
-        imap = imaplib.IMAP4_SSL(creds.host, creds.port)
+        imap = imaplib.IMAP4_SSL(creds.host, creds.port, timeout=_NETWORK_TIMEOUT_S)
     else:
-        imap = imaplib.IMAP4(creds.host, creds.port)
+        imap = imaplib.IMAP4(creds.host, creds.port, timeout=_NETWORK_TIMEOUT_S)
     imap.login(creds.username, creds.password)
     return imap
+
+
+# SearchRequest.criteria is a free-form dict[str, Any], not a typed Pydantic field, so
+# it bypasses per-field max_length — bound it here instead (REPORT.md H-07).
+_MAX_SEARCH_VALUE_LEN = 512
+
+
+def _escape_imap_quoted(value: str) -> str:
+    # CR/LF would terminate the IMAP command line early and let the rest of the value
+    # be interpreted as a new IMAP command (protocol injection) — reject outright rather
+    # than stripping, since silently mangling the search value is worse than a clear error.
+    if "\r" in value or "\n" in value:
+        raise InvalidImapValueError("value must not contain CR or LF")
+    if len(value) > _MAX_SEARCH_VALUE_LEN:
+        raise InvalidImapValueError(f"value exceeds max length of {_MAX_SEARCH_VALUE_LEN}")
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def build_search_criteria(criteria: dict[str, Any]) -> str:
@@ -155,19 +216,27 @@ def build_search_criteria(criteria: dict[str, Any]) -> str:
     if criteria.get("seen"):
         parts.append("SEEN")
     if criteria.get("from"):
-        parts.append(f'FROM "{criteria["from"]}"')
+        parts.append(f'FROM "{_escape_imap_quoted(criteria["from"])}"')
     if criteria.get("to"):
-        parts.append(f'TO "{criteria["to"]}"')
+        parts.append(f'TO "{_escape_imap_quoted(criteria["to"])}"')
     if criteria.get("subject"):
-        parts.append(f'SUBJECT "{criteria["subject"]}"')
+        parts.append(f'SUBJECT "{_escape_imap_quoted(criteria["subject"])}"')
     if criteria.get("since"):
-        parts.append(f'SINCE "{criteria["since"]}"')
+        parts.append(f'SINCE "{_escape_imap_quoted(criteria["since"])}"')
     if criteria.get("before"):
-        parts.append(f'BEFORE "{criteria["before"]}"')
+        parts.append(f'BEFORE "{_escape_imap_quoted(criteria["before"])}"')
     if criteria.get("body"):
-        parts.append(f'BODY "{criteria["body"]}"')
+        parts.append(f'BODY "{_escape_imap_quoted(criteria["body"])}"')
     if criteria.get("raw"):
-        parts.append(criteria["raw"])
+        # "raw" is meant to carry arbitrary IMAP search syntax verbatim (parentheses, OR,
+        # NOT, ...), so it can't be escaped like the fields above — only CR/LF (protocol
+        # injection) is rejected, everything else passes through as documented in API.md.
+        raw = criteria["raw"]
+        if "\r" in raw or "\n" in raw:
+            raise InvalidImapValueError("raw search criteria must not contain CR or LF")
+        if len(raw) > _MAX_SEARCH_VALUE_LEN:
+            raise InvalidImapValueError(f"raw search criteria exceeds max length of {_MAX_SEARCH_VALUE_LEN}")
+        parts.append(raw)
     return " ".join(parts) if parts else "ALL"
 
 
@@ -185,6 +254,16 @@ def decode_str(value: str) -> str:
         else:
             parts.append(fragment)
     return "".join(parts)
+
+
+def _validate_uid(uid: str) -> str:
+    # UIDs are interpolated directly into IMAP commands (STORE/COPY/MOVE/FETCH) — a
+    # non-numeric value could inject arbitrary IMAP syntax. isascii() guards against
+    # non-ASCII digit characters (e.g. Arabic-indic) that pass isdigit() but aren't
+    # valid IMAP protocol bytes.
+    if not (uid.isascii() and uid.isdigit()):
+        raise InvalidUidError(uid)
+    return uid
 
 
 def parse_message_envelope(imap: imaplib.IMAP4, uid: str) -> dict[str, Any]:
@@ -243,11 +322,11 @@ def list_messages(req: ListRequest) -> dict[str, Any]:
     creds = get_imap_credentials(req.account)
     imap = imap_connect(creds)
     try:
-        typ, _ = imap.select(f'"{req.folder}"', readonly=True)
+        typ, _ = imap.select(f'"{_escape_imap_quoted(req.folder)}"', readonly=True)
         if typ != "OK":
             raise ValueError(f"Cannot select folder '{req.folder}'")
         if req.since_uid:
-            next_uid = int(req.since_uid) + 1
+            next_uid = int(_validate_uid(req.since_uid)) + 1
             criteria = f"UID {next_uid}:*"
             _, uids = imap.uid("SEARCH", criteria)
         else:
@@ -270,11 +349,12 @@ def list_messages(req: ListRequest) -> dict[str, Any]:
 
 
 def get_message(req: GetRequest) -> dict[str, Any]:
+    uid = _validate_uid(req.uid)
     creds = get_imap_credentials(req.account)
     imap = imap_connect(creds)
     try:
-        imap.select(f'"{req.folder}"', readonly=True)
-        _, data = imap.uid("FETCH", req.uid, "(FLAGS BODY.PEEK[])")
+        imap.select(f'"{_escape_imap_quoted(req.folder)}"', readonly=True)
+        _, data = imap.uid("FETCH", uid, "(FLAGS BODY.PEEK[])")
         if not data or data[0] is None:
             raise MessageNotFoundError(req.uid)
         raw = data[0][1]
@@ -337,7 +417,7 @@ def search_messages(req: SearchRequest) -> dict[str, Any]:
     creds = get_imap_credentials(req.account)
     imap = imap_connect(creds)
     try:
-        imap.select(f'"{req.folder}"', readonly=True)
+        imap.select(f'"{_escape_imap_quoted(req.folder)}"', readonly=True)
         criteria = build_search_criteria(req.criteria)
         _, uids = imap.uid("SEARCH", criteria)
         uid_list = uids[0].split() if uids[0] else []
@@ -349,11 +429,12 @@ def search_messages(req: SearchRequest) -> dict[str, Any]:
 
 
 def delete_messages(req: DeleteRequest) -> dict[str, Any]:
+    uids = [_validate_uid(u) for u in req.uids]
     creds = get_imap_credentials(req.account)
     imap = imap_connect(creds)
     try:
-        imap.select(f'"{req.folder}"')
-        for uid in req.uids:
+        imap.select(f'"{_escape_imap_quoted(req.folder)}"')
+        for uid in uids:
             imap.uid("STORE", uid, "+FLAGS", "\\Deleted")
         imap.expunge()
         return {"deleted": req.uids}
@@ -362,16 +443,17 @@ def delete_messages(req: DeleteRequest) -> dict[str, Any]:
 
 
 def move_messages(req: MoveRequest) -> dict[str, Any]:
+    uids = [_validate_uid(u) for u in req.uids]
     creds = get_imap_credentials(req.account)
     imap = imap_connect(creds)
     try:
-        imap.select(f'"{req.folder}"')
-        uid_str = ",".join(req.uids)
+        imap.select(f'"{_escape_imap_quoted(req.folder)}"')
+        uid_str = ",".join(uids)
         try:
-            imap.uid("MOVE", uid_str, f'"{req.destination}"')
+            imap.uid("MOVE", uid_str, f'"{_escape_imap_quoted(req.destination)}"')
         except (imaplib.IMAP4.error, AttributeError):
-            imap.uid("COPY", uid_str, f'"{req.destination}"')
-            for uid in req.uids:
+            imap.uid("COPY", uid_str, f'"{_escape_imap_quoted(req.destination)}"')
+            for uid in uids:
                 imap.uid("STORE", uid, "+FLAGS", "\\Deleted")
             imap.expunge()
         return {"moved": req.uids, "destination": req.destination}
@@ -382,26 +464,39 @@ def move_messages(req: MoveRequest) -> dict[str, Any]:
 def flag_messages(req: FlagRequest) -> dict[str, Any]:
     if req.action not in ("read", "unread"):
         raise InvalidFlagActionError(req.action)
+    uids = [_validate_uid(u) for u in req.uids]
     creds = get_imap_credentials(req.account)
     imap = imap_connect(creds)
     try:
-        imap.select(f'"{req.folder}"')
+        imap.select(f'"{_escape_imap_quoted(req.folder)}"')
         op = "+FLAGS" if req.action == "read" else "-FLAGS"
-        for uid in req.uids:
+        for uid in uids:
             imap.uid("STORE", uid, op, "\\Seen")
         return {"uids": req.uids, "action": req.action}
     finally:
         imap.logout()
 
 
+def _validate_header_value(field: str, value: str) -> str:
+    # CR/LF in a header value lets an attacker inject arbitrary extra headers (Bcc,
+    # Content-Type, ...) or forge additional messages within the same SMTP transaction.
+    if "\r" in value or "\n" in value:
+        raise InvalidHeaderValueError(field, value)
+    return value
+
+
 def send_message(req: SendRequest) -> dict[str, Any]:
+    # from_addr/to/cc/bcc are EmailStr — already guaranteed CRLF-free by email-validator,
+    # only the free-text subject still needs the explicit check.
+    subject = _validate_header_value("subject", req.subject)
+
     smtp = get_smtp_config(req.account)
     msg = MIMEMultipart("alternative") if req.html else MIMEMultipart()
     msg["From"] = req.from_addr
     msg["To"] = ", ".join(req.to)
     if req.cc:
         msg["Cc"] = ", ".join(req.cc)
-    msg["Subject"] = req.subject
+    msg["Subject"] = subject
     mime_type = "html" if req.html else "plain"
     msg.attach(MIMEText(req.body, mime_type, "utf-8"))
 
@@ -410,9 +505,9 @@ def send_message(req: SendRequest) -> dict[str, Any]:
     conn: smtplib.SMTP
     if smtp["ssl"]:
         ctx = ssl_module.create_default_context()
-        conn = smtplib.SMTP_SSL(smtp["host"], smtp["port"], context=ctx)
+        conn = smtplib.SMTP_SSL(smtp["host"], smtp["port"], context=ctx, timeout=_NETWORK_TIMEOUT_S)
     else:
-        conn = smtplib.SMTP(smtp["host"], smtp["port"])
+        conn = smtplib.SMTP(smtp["host"], smtp["port"], timeout=_NETWORK_TIMEOUT_S)
         if smtp["starttls"]:
             conn.starttls()
 

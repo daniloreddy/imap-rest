@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dotenv import load_dotenv
 from redberry_webkit.env_resolver import resolve_env_path
 
@@ -22,7 +24,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, status  
 from fastapi.responses import RedirectResponse  # noqa: E402
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer  # noqa: E402
 from nicegui import ui  # noqa: E402
-from redberry_webkit.auth import client_ip, purge_loop  # noqa: E402
+from redberry_webkit.auth import client_ip, is_secure_context, purge_loop  # noqa: E402
 from redberry_webkit.logging_utils import CredentialFilter  # noqa: E402
 from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: E402
 from slowapi.errors import RateLimitExceeded  # noqa: E402
@@ -44,6 +46,7 @@ HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8000"))
 DEV = os.getenv("DEV", "false").lower() in ("true", "1", "yes")
 CONFIG_RELOAD_INTERVAL_S = 5
+METRICS_PURGE_INTERVAL_S = 24 * 3600
 
 _stream_handler = logging.StreamHandler()
 _file_handler = RotatingFileHandler(LOG_DIR / "app.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
@@ -74,10 +77,14 @@ def verify_api_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(_security),
 ) -> str | None:
     """Add as Depends(verify_api_token) to any route outside /ui that needs protecting.
-    No-op if API_TOKENS isn't configured — bearer auth is opt-in, not mandatory."""
+    No-op if API_TOKENS isn't configured — bearer auth is opt-in, not mandatory.
+    Routes meant to stay public (/health, ...) never get this Depends."""
     raw_api_tokens = config.get("API_TOKENS", "")
     tokens = {t.strip() for t in raw_api_tokens.split(",") if t.strip()}
     if raw_api_tokens.strip() and not tokens:
+        # API_TOKENS is set but every entry was blank/whitespace after cleanup (e.g. " , ") —
+        # fail closed instead of silently treating auth as unconfigured, which would expose
+        # every Bearer-protected route with no error or log to flag the misconfiguration.
         logger.error("API_TOKENS is set but contains no valid tokens; denying all API requests")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -85,9 +92,10 @@ def verify_api_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     if tokens:
-        if credentials is None or not any(
-            secrets.compare_digest(credentials.credentials, t) for t in tokens
-        ):
+        # sum() rather than any(): any() short-circuits on first match, leaking which
+        # token position matched via response timing (a binary-search side channel over
+        # a large token set). sum() always compares against every token.
+        if credentials is None or sum(secrets.compare_digest(credentials.credentials, t) for t in tokens) == 0:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or missing API token",
@@ -102,7 +110,20 @@ async def _config_reload_loop(interval_s: int) -> None:
         config.reload_if_stale()
 
 
+async def _metrics_purge_loop(interval_s: int) -> None:
+    # MetricsStore.purge_old() exists but was never called anywhere (REPORT.md M-08) —
+    # without this loop the metrics DB grows unbounded. Retention re-read each cycle so
+    # it stays hot-reloadable from the dashboard like RATE_LIMIT/API_TOKENS.
+    while True:
+        await asyncio.sleep(interval_s)
+        await metrics.purge_old(days=config.get_int("METRICS_RETENTION_DAYS", 30))
+
+
 def _crash_on_task_error(task: asyncio.Task[None]) -> None:
+    # A background loop task (purge_loop, config reload) is only ever supposed to end
+    # via .cancel() at shutdown. If it dies from an unhandled exception instead, asyncio
+    # would otherwise just log "Task exception was never retrieved" and keep the process
+    # alive with silently broken rate-limit purging / config hot-reload — worse than crashing.
     if task.cancelled():
         return
     exc = task.exception()
@@ -118,9 +139,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     purge_task.add_done_callback(_crash_on_task_error)
     config_task = asyncio.create_task(_config_reload_loop(CONFIG_RELOAD_INTERVAL_S))
     config_task.add_done_callback(_crash_on_task_error)
+    metrics_purge_task = asyncio.create_task(_metrics_purge_loop(METRICS_PURGE_INTERVAL_S))
+    metrics_purge_task.add_done_callback(_crash_on_task_error)
     yield
     purge_task.cancel()
     config_task.cancel()
+    metrics_purge_task.cancel()
 
 
 app = FastAPI(
@@ -131,6 +155,7 @@ app = FastAPI(
     openapi_url="/openapi.json" if DEV else None,
 )
 app.state.limiter = limiter
+# slowapi lacks precise stubs for this handler signature, hence the ignore below.
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 app.add_middleware(SlowAPIMiddleware)
 app.include_router(ui_router)
@@ -153,6 +178,22 @@ async def _auth_gate(request: Request, call_next: RequestResponseEndpoint) -> Re
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    # Registered after _auth_gate: Starlette's @app.middleware("http") makes the
+    # last-registered middleware the outermost, so this still runs (and sets headers)
+    # on the /login redirect _auth_gate returns without calling call_next.
+    # CSP is deliberately not set here: NiceGUI/Quasar load inline scripts, Google Fonts,
+    # and a websocket transport, so a safe CSP needs live-browser tuning first (see
+    # REPORT.md M-10, left open) — these three headers carry no such risk of breaking /ui.
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    if is_secure_context(request.headers):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -165,12 +206,29 @@ async def root() -> RedirectResponse:
 
 T = TypeVar("T")
 
+# A socket-level timeout in app/mail.py (_NETWORK_TIMEOUT_S) already bounds the IMAP/SMTP
+# calls themselves, but this second layer stops the request-response cycle promptly even
+# if something upstream of the socket (DNS resolution, ...) ignores it (REPORT.md H-06).
+_TASK_TIMEOUT_S = 45
 
-async def _run_tracked(endpoint: str, account: str, fn: Callable[[], T]) -> T:
+
+async def _run_tracked(endpoint: str, account: str, fn: Callable[[], T]) -> T:  # noqa: UP047
     """Run blocking IMAP/SMTP work off the event loop and record it in MetricsStore."""
     start = time.monotonic()
     try:
-        result = await asyncio.to_thread(fn)
+        result = await asyncio.wait_for(asyncio.to_thread(fn), timeout=_TASK_TIMEOUT_S)
+    except TimeoutError as exc:
+        logger.warning("timeout in %s (account=%s)", endpoint, account)
+        await metrics.record(
+            MetricsRecord(
+                timestamp=time.time(),
+                status="error",
+                duration_s=time.monotonic() - start,
+                error_message="operation timed out",
+                extra={"endpoint": endpoint, "account": account},
+            )
+        )
+        raise HTTPException(status_code=503, detail="Upstream IMAP/SMTP server did not respond in time") from exc
     except mail.AccountNotConfiguredError as exc:
         await metrics.record(
             MetricsRecord(
@@ -193,6 +251,17 @@ async def _run_tracked(endpoint: str, account: str, fn: Callable[[], T]) -> T:
             )
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except mail.InvalidUidError as exc:
+        await metrics.record(
+            MetricsRecord(
+                timestamp=time.time(),
+                status="error",
+                duration_s=time.monotonic() - start,
+                error_message=str(exc),
+                extra={"endpoint": endpoint, "account": account},
+            )
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except mail.MessageNotFoundError as exc:
         await metrics.record(
             MetricsRecord(
@@ -204,7 +273,34 @@ async def _run_tracked(endpoint: str, account: str, fn: Callable[[], T]) -> T:
             )
         )
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except mail.InvalidHeaderValueError as exc:
+        await metrics.record(
+            MetricsRecord(
+                timestamp=time.time(),
+                status="error",
+                duration_s=time.monotonic() - start,
+                error_message=str(exc),
+                extra={"endpoint": endpoint, "account": account},
+            )
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except mail.InvalidImapValueError as exc:
+        # subclasses ValueError — must be caught before the generic ValueError branch
+        # below, which would otherwise swallow it as a 500.
+        await metrics.record(
+            MetricsRecord(
+                timestamp=time.time(),
+                status="error",
+                duration_s=time.monotonic() - start,
+                error_message=str(exc),
+                extra={"endpoint": endpoint, "account": account},
+            )
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (imaplib.IMAP4.error, OSError, ValueError) as exc:
+        # Full exception logged server-side and kept in metrics for the dashboard; the
+        # client only gets a generic message so IMAP/SMTP hostnames, auth errors, and
+        # mailbox structure never leak into an HTTP response (REPORT.md C-06).
         logger.exception("error in %s (account=%s)", endpoint, account)
         await metrics.record(
             MetricsRecord(
@@ -215,7 +311,7 @@ async def _run_tracked(endpoint: str, account: str, fn: Callable[[], T]) -> T:
                 extra={"endpoint": endpoint, "account": account},
             )
         )
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
     else:
         await metrics.record(
             MetricsRecord(
@@ -310,6 +406,9 @@ if __name__ == "__main__":
         host=args.host,
         port=args.port,
         reload=args.dev,
+        # Reload must not watch data/ (logs, sqlite, auth.json, NiceGUI storage) — the
+        # app writes there continuously, and watching it makes every log line trigger
+        # a reload that logs again, forever.
         reload_dirs=[str(PROJECT_ROOT / "app"), str(PROJECT_ROOT / "static")] if args.dev else None,
         loop="asyncio",
     )

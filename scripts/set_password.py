@@ -11,6 +11,7 @@ _VENV_PYTHON = _VENV_DIR / ("Scripts/python.exe" if sys.platform == "win32" else
 
 
 def _bootstrap() -> None:
+    # Deps already importable (Docker: installed globally) — skip venv entirely.
     sys.path.insert(0, str(PROJECT_ROOT))
     try:
         import redberry_webkit.auth  # noqa: F401

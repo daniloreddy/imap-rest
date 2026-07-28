@@ -34,7 +34,7 @@ FastAPI + NiceGUI app, following the `redberry-webapp-template` layout (see `@ru
 
 - `app/main.py` — the entrypoint and the FastAPI app (module-level `app = FastAPI(...)`), auth gate, rate limiting, NiceGUI mount, IMAP/SMTP endpoints.
 - `app/mail.py` — business logic (IMAP/SMTP operations, request/response models). No FastAPI imports — unit-testable in isolation.
-- `app/config.py` — `ConfigManager` (redberry-webkit), runtime-editable settings (`RATE_LIMIT`, `API_TOKENS`, `REFRESH_ENABLED`, `REFRESH_INTERVAL`), hot-reloaded from `.env`.
+- `app/config.py` — `ConfigManager` (redberry-webkit), runtime-editable settings (`RATE_LIMIT`, `API_TOKENS`, `REFRESH_ENABLED`, `REFRESH_INTERVAL`, `METRICS_RETENTION_DAYS`), hot-reloaded from `.env`.
 - `app/metrics.py` — `MetricsStore` (redberry-webkit), SQLite-backed log of every API call (timestamp, status, duration, error, and `extra={"endpoint", "account"}`).
 - `app/ui/router.py` — `/login`, `/auth/login`, `/auth/logout` (cookie/JWT session via `AuthManager`).
 - `app/ui/pages.py` — dashboard (`/ui`) showing request metrics/history, and settings (`/ui/config`).

@@ -30,7 +30,7 @@ Le credenziali IMAP/SMTP non si passano nella request. Ogni endpoint accetta `"a
 | `SMTP_<ACCOUNT>_STARTTLS` | STARTTLS (default `true`) |
 | `SMTP_<ACCOUNT>_SSL` | SSL diretto (default `false`) |
 
-Il nome account viene convertito in maiuscolo: `"danilo"` → `IMAP_DANILO_HOST`. Account non configurato → `400`.
+Il nome account viene convertito in maiuscolo: `"danilo"` → `IMAP_DANILO_HOST`. Account non configurato → `400`. `account` accetta solo `[a-zA-Z0-9_-]`, max 64 caratteri (validazione a livello di richiesta, `422` se non rispettata).
 
 ---
 
@@ -125,7 +125,7 @@ Recupera il contenuto completo di un singolo messaggio: header, corpo testo/HTML
 | Campo | Tipo | Default | Descrizione |
 |-------|------|---------|-------------|
 | `folder` | string | `"INBOX"` | Cartella contenente il messaggio |
-| `uid` | string | — | UID del messaggio |
+| `uid` | string | — | UID del messaggio (intero positivo, max 20 caratteri) |
 | `include_attachments` | bool | `false` | Se `true`, include il contenuto degli allegati in base64 |
 
 **Response**
@@ -236,7 +236,7 @@ Cancella messaggi per UID ed esegue expunge.
 | Campo | Tipo | Default | Descrizione |
 |-------|------|---------|-------------|
 | `folder` | string | `"INBOX"` | Cartella contenente i messaggi |
-| `uids` | string[] | — | Lista UID da cancellare |
+| `uids` | string[] | — | Lista UID da cancellare (ogni UID: intero positivo, max 20 caratteri) |
 
 **Response**
 ```json
@@ -264,7 +264,7 @@ Sposta messaggi in un'altra cartella. Usa il comando IMAP `MOVE` (RFC 6851) se s
 | Campo | Tipo | Default | Descrizione |
 |-------|------|---------|-------------|
 | `folder` | string | `"INBOX"` | Cartella sorgente |
-| `uids` | string[] | — | Lista UID da spostare |
+| `uids` | string[] | — | Lista UID da spostare (ogni UID: intero positivo, max 20 caratteri) |
 | `destination` | string | — | Cartella destinazione |
 
 **Response**
@@ -294,7 +294,7 @@ Marca messaggi come letti o non letti.
 | Campo | Tipo | Default | Descrizione |
 |-------|------|---------|-------------|
 | `folder` | string | `"INBOX"` | Cartella contenente i messaggi |
-| `uids` | string[] | — | Lista UID |
+| `uids` | string[] | — | Lista UID (ogni UID: intero positivo, max 20 caratteri) |
 | `action` | string | — | `"read"` o `"unread"` |
 
 **Response**
@@ -327,12 +327,12 @@ Invia un messaggio via SMTP.
 
 | Campo | Tipo | Default | Descrizione |
 |-------|------|---------|-------------|
-| `from_addr` | string | — | Indirizzo mittente |
-| `to` | string[] | — | Destinatari |
-| `cc` | string[] | `[]` | CC |
-| `bcc` | string[] | `[]` | BCC |
-| `subject` | string | — | Oggetto |
-| `body` | string | — | Corpo del messaggio |
+| `from_addr` | string | — | Indirizzo mittente (formato email valido, `422` altrimenti) |
+| `to` | string[] | — | Destinatari (formato email valido) |
+| `cc` | string[] | `[]` | CC (formato email valido) |
+| `bcc` | string[] | `[]` | BCC (formato email valido) |
+| `subject` | string | — | Oggetto (max 998 caratteri) |
+| `body` | string | — | Corpo del messaggio (max 5.000.000 caratteri) |
 | `html` | bool | `false` | `true` per corpo HTML |
 
 **Response**
@@ -353,9 +353,11 @@ Invia un messaggio via SMTP.
 |--------|-------|
 | `401` | Token Bearer assente o non valido (solo se `API_TOKENS` è configurato) |
 | `429` | Rate limit superato (`RATE_LIMIT`, configurabile da dashboard) |
-| `400` | Account non configurato, o `action` non valida in `/messages/flag` |
+| `400` | Account non configurato, `action` non valida in `/messages/flag`, o UID non numerico |
 | `404` | UID non trovato (`/messages/get`) |
-| `500` | Errore IMAP/SMTP (credenziali errate, server non raggiungibile, cartella inesistente) |
+| `422` | Validazione richiesta fallita (`account` con caratteri non ammessi, email non valida, campo troppo lungo, ...) |
+| `500` | Errore IMAP/SMTP (credenziali errate, server non raggiungibile, cartella inesistente) — messaggio generico, dettaglio solo nei log server |
+| `503` | Server IMAP/SMTP non ha risposto entro il timeout |
 
 ---
 

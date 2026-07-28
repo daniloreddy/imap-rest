@@ -42,8 +42,15 @@ async def auth_login(request: Request, password: str = Form(...)) -> RedirectRes
     if auth.is_ip_blocked(ip):
         return RedirectResponse(url="/login?error=blocked", status_code=303)
     if auth.is_global_limited():
+        # Cross-IP attempt volume is logged, never used to block: a hard global lockout
+        # lets one attacker (real or spoofed IPs) lock out every legitimate admin login
+        # (REPORT.md SEC-02). Per-IP blocking above is the actual defense.
         logger.warning("elevated login attempt volume across IPs; latest attempt from ip=%s", ip)
 
+    # scrypt at redberry_webkit's current cost (N=131072) takes ~150-250ms and allocates
+    # ~128MB — running it inline would block the event loop for that whole window on
+    # every login attempt, see @rules/uvicorn.md §5 for why CPU/memory-bound sync work
+    # in an async handler goes through to_thread instead.
     success = await asyncio.to_thread(auth.verify_password, password)
     auth.record_attempt(ip, success=success)
     if not success:

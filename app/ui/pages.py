@@ -103,7 +103,10 @@ async def dashboard_page() -> None:
                 )
                 _metric_card("Durata media (s)", f"{stats['avg_duration_s']:.2f}", "info")
 
-            history = await metrics.get_history()
+            # redact_sensitive=True: error_message/extra can carry IMAP/SMTP server
+            # responses (hostnames, addresses, ...) — not appropriate for a dashboard
+            # table (REPORT.md H-04), even though full detail stays in the raw SQLite log.
+            history = await metrics.get_history(redact_sensitive=True)
             table_container.clear()
             with table_container:
                 rows = [
