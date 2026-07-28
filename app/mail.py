@@ -365,7 +365,13 @@ def list_messages(req: ListRequest) -> dict[str, Any]:
         uid_list.sort(key=int)
         effective_limit = req.limit if req.limit is not None else 100
         if effective_limit > 0:
-            uid_list = uid_list[-effective_limit:]
+            if next_uid is not None:
+                # Polling mode (since_uid set, e.g. n8n incremental fetch): the caller
+                # wants the next N messages after the cursor, oldest first — not the N
+                # most recent in the whole range, which would silently skip messages.
+                uid_list = uid_list[:effective_limit]
+            else:
+                uid_list = uid_list[-effective_limit:]
         messages = [parse_message_envelope(imap, u.decode()) for u in uid_list]
         return {"folder": req.folder, "since_uid": req.since_uid, "count": len(messages), "messages": messages}
     finally:

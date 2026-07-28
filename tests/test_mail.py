@@ -155,6 +155,30 @@ def test_list_messages_keeps_genuinely_new_uid(monkeypatch: pytest.MonkeyPatch) 
     assert result["messages"][0]["uid"] == "1041"
 
 
+def test_list_messages_since_uid_with_limit_returns_oldest_after_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Regression: since_uid + limit used to slice the tail (uid_list[-limit:]), returning
+    # the most recent UID in range (1104) instead of the next one after the cursor (1101) —
+    # breaking incremental polling (e.g. n8n fetching "the next message after 1100").
+    fake = _FakeImap(search_result=b"1101 1102 1103 1104", fetch_uids=["1101", "1102", "1103", "1104"])
+    _patch_imap(monkeypatch, fake)
+
+    result = list_messages(ListRequest(account="danilo", since_uid="1100", limit=1))
+
+    assert result["count"] == 1
+    assert result["messages"][0]["uid"] == "1101"
+
+
+def test_list_messages_without_since_uid_keeps_most_recent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No cursor: limit still means "most recent N", unchanged from before this fix.
+    fake = _FakeImap(search_result=b"1101 1102 1103 1104", fetch_uids=["1101", "1102", "1103", "1104"])
+    _patch_imap(monkeypatch, fake)
+
+    result = list_messages(ListRequest(account="danilo", limit=1))
+
+    assert result["count"] == 1
+    assert result["messages"][0]["uid"] == "1104"
+
+
 @pytest.mark.parametrize("bad_since_uid", ["1;DELETE", "1 2", "-1", "1\r\nDELETE"])
 def test_list_messages_rejects_non_numeric_since_uid(monkeypatch: pytest.MonkeyPatch, bad_since_uid: str) -> None:
     fake = _FakeImap(search_result=b"", fetch_uids=[])
