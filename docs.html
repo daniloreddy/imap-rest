@@ -513,7 +513,7 @@
           <thead><tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr></thead>
           <tbody>
             <tr><td><code>folder</code></td><td>string</td><td><code>"INBOX"</code></td><td>Cartella da listare</td></tr>
-            <tr><td><code>since_uid</code></td><td>string</td><td><code>null</code> (tutti)</td><td>Ritorna solo messaggi con UID &ge; questo valore</td></tr>
+            <tr><td><code>since_uid</code></td><td>string</td><td><code>null</code> (tutti)</td><td>Ritorna solo messaggi con UID &gt; questo valore (esclusivo — passa l'ultimo UID già processato)</td></tr>
             <tr><td><code>limit</code></td><td>int</td><td><code>100</code></td><td>Max messaggi; <code>null</code>/assente = 100, negativo = tutti</td></tr>
           </tbody>
         </table>

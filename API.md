@@ -82,7 +82,7 @@ Recupera gli header di tutti i messaggi a partire da un UID. Utile per sincroniz
 | Campo | Tipo | Default | Descrizione |
 |-------|------|---------|-------------|
 | `folder` | string | `"INBOX"` | Cartella da listare |
-| `since_uid` | string | `null` (tutti) | Ritorna UID >= questo valore |
+| `since_uid` | string | `null` (tutti) | Ritorna UID > questo valore (esclusivo — passa l'ultimo UID già processato) |
 | `limit` | int | `100` | Max messaggi; `null` o assente = 100, negativo = tutti |
 
 **Response**

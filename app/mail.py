@@ -251,8 +251,14 @@ def list_messages(req: ListRequest) -> dict[str, Any]:
             criteria = f"UID {next_uid}:*"
             _, uids = imap.uid("SEARCH", criteria)
         else:
+            next_uid = None
             _, uids = imap.uid("SEARCH", "ALL")
         uid_list = uids[0].split() if uids[0] else []
+        if next_uid is not None:
+            # RFC 3501: "X:*" is an unordered range — if next_uid > highest UID in the
+            # mailbox (no new messages), the server swaps it to "*:X" and returns the
+            # highest existing UID instead of nothing. Drop anything below next_uid.
+            uid_list = [u for u in uid_list if int(u) >= next_uid]
         uid_list.sort(key=int)
         effective_limit = req.limit if req.limit is not None else 100
         if effective_limit > 0:
