@@ -190,9 +190,15 @@ def mail_page() -> None:
                 accounts, label="Account", value=accounts[0] if accounts else None
             ).classes("w-48")
             folder_select = ui.select([], label="Cartella").classes("w-64")
+            limit_input = (
+                ui.number(label="N. messaggi", value=50, min=1, max=1000, step=1, precision=0)
+                .classes("w-32")
+                .props('dense hint="max elementi"')
+            )
             refresh_button = ui.button(icon="refresh").props("flat round color=primary").tooltip("Aggiorna")
 
         table_container = ui.column().classes("full-width")
+        _load_token = {"value": 0}
 
         async def _open_message(account: str, folder: str, uid: str) -> None:
             try:
@@ -225,16 +231,28 @@ def mail_page() -> None:
             dialog.open()
 
         async def _load_messages() -> None:
+            # account_select's change fires _load_folders, which itself both awaits
+            # _load_messages() directly *and* triggers folder_select's on_value_change
+            # (via set_options(..., value=...)) — two concurrent calls in flight. A token
+            # guard ensures only the most recently started call is allowed to render,
+            # so a stale response can't append a second table below the fresh one.
+            _load_token["value"] += 1
+            token = _load_token["value"]
             account = account_select.value
             folder = folder_select.value
+            limit = int(limit_input.value or 50)
             table_container.clear()
             if not account or not folder:
                 return
             try:
-                status, body = await api_client.list_messages(account, folder, limit=50)
+                status, body = await api_client.list_messages(account, folder, limit=limit)
             except httpx.RequestError as exc:
+                if token != _load_token["value"]:
+                    return
                 with table_container:
                     ui.label(f"Errore di rete: {exc}").classes("text-negative")
+                return
+            if token != _load_token["value"]:
                 return
             if status != 200:
                 with table_container:
@@ -257,13 +275,15 @@ def mail_page() -> None:
                 ]
                 tbl = ui.table(
                     columns=[
-                        {"name": "date", "label": "Data", "field": "date"},
-                        {"name": "from", "label": "Da", "field": "from"},
-                        {"name": "subject", "label": "Oggetto", "field": "subject"},
-                        {"name": "flags", "label": "Flags", "field": "flags"},
+                        {"name": "uid", "label": "UID", "field": "uid", "sortable": True},
+                        {"name": "date", "label": "Data", "field": "date", "sortable": True},
+                        {"name": "from", "label": "Da", "field": "from", "sortable": True},
+                        {"name": "subject", "label": "Oggetto", "field": "subject", "sortable": True},
+                        {"name": "flags", "label": "Flags", "field": "flags", "sortable": True},
                     ],
                     rows=rows,
                     row_key="uid",
+                    pagination={"rowsPerPage": 0, "sortBy": "date", "descending": True},
                 ).classes("full-width cursor-pointer")
 
                 async def _on_row_click(e: Any) -> None:
@@ -295,6 +315,7 @@ def mail_page() -> None:
 
         account_select.on_value_change(_load_folders)
         folder_select.on_value_change(lambda _: _load_messages())
+        limit_input.on_value_change(lambda _: _load_messages())
         refresh_button.on_click(_load_messages)
 
         if accounts:
