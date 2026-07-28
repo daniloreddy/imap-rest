@@ -35,6 +35,18 @@ def _page_setup(section_title: str) -> Any:
     return ui.dark_mode(value=ng_app.storage.user.get("dark_mode", True))
 
 
+def _navigate_handler(path: str) -> Callable[[], None]:
+    # A zero-arg closure per path, built via this factory rather than a loop-local
+    # `lambda p=path: ...`: NiceGUI calls on_click handlers with zero args whenever
+    # every parameter has a default (see nicegui.events.handle_event), so the lambda
+    # form works fine at runtime — but Pyright infers `p`'s type from the Union
+    # Handler[ClickEventArguments] signature it's assigned to, not from the default,
+    # so it wrongly flags `ui.navigate.to(p)` as receiving a ClickEventArguments.
+    # Binding `path` as the factory's own argument sidesteps both the false-positive
+    # and the classic late-binding closure bug in one move.
+    return lambda: ui.navigate.to(path)
+
+
 def _header(
     page_title: str,
     nav_items: list[NavItem],
@@ -48,7 +60,7 @@ def _header(
 
         for label, icon, path in nav_items:
             if label.lower() != current.lower():
-                ui.button(icon=icon, on_click=lambda p=path: ui.navigate.to(p)).props(
+                ui.button(icon=icon, on_click=_navigate_handler(path)).props(
                     "flat color=white round"
                 ).tooltip(label)
 
