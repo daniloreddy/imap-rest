@@ -1,6 +1,6 @@
 # Changes here will be overwritten by Copier; used by `copier update`.
 _commit: v0.2.4-1-gae8cc33
-_src_path: C:/redberry/src/python/redberry-webapp-template
+_src_path: gh:daniloreddy/redberry-webapp-template
 app_name: IMAP REST
 app_slug: imap_rest
 github_owner: daniloreddy
